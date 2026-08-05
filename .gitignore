@@ -1,0 +1,14 @@
+/obj/*
+/bin/*
+/Makefile.old
+/.clangd
+\;
+\\
+log.txt
+test_log.txt
+log_test.txt
+tmp.c
+test.c
+tmp
+test
+vgcore.*

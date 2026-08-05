@@ -3,7 +3,7 @@ CC32 ?= $(CC) -m32
 AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
-COMMON_CFLAGS := -Wall -Wpedantic -Wextra -fPIC -std=c11
+COMMON_CFLAGS := -Wall -Wpedantic -Wextra -fPIC
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP
 LDFLAGS?=-pie

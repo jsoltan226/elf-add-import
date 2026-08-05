@@ -1,5 +1,5 @@
-#define _GNU_SOURCE
-#define _FILE_OFFSET_BITS 64
+#include "elf.h"
+#include "portable-endian.h"
 #include <stdio.h>
 #include <errno.h>
 #include <assert.h>
@@ -10,11 +10,6 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <stdalign.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <endian.h>
-#include <sys/stat.h>
-#include <elf.h>
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
 
@@ -500,53 +495,61 @@ err:
 
 static int read_file(const char *path, struct blob *out)
 {
-    int fd = -1;
+    FILE *fp = NULL;
     uint8_t *buf = NULL;
-    struct stat st = { 0 };
 
     out->data = NULL;
     out->size = 0;
 
-    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) == -1) {
+    if ((fp = fopen(path, "rb")) == NULL) {
         pr_error("Failed to open input file \"%s\": %d (%s)\n",
                 path, errno, strerror(errno));
         goto err;
     }
-    if (fstat(fd, &st)) {
-        pr_error("Failed to stat input file \"%s\": %d (%s)\n",
+
+    if (fseek(fp, 0, SEEK_END)) {
+        pr_error("Failed to seek to the end of input file \"%s\": %d (%s)\n",
                 path, errno, strerror(errno));
         goto err;
-    } else if (st.st_size < 0 ||
-            (uint64_t)st.st_size > UINT64_MAX ||
-            (uint64_t)st.st_size > SIZE_MAX)
+    }
+    long pos = ftell(fp);
+    if (pos < 0 ||
+            (unsigned long)pos > SIZE_MAX || (unsigned long)pos > UINT64_MAX)
     {
-        pr_error("Invalid input file size\n");
+        pr_error("Invalid file position: %ld\n", pos);
+        goto err;
+    }
+    const size_t size = (size_t)pos;
+
+    if (fseek(fp, 0, SEEK_SET)) {
+        pr_error("Failed to seek to the start of input file \"%s\": %d (%s)\n",
+                path, errno, strerror(errno));
         goto err;
     }
 
-    if ((buf = malloc(st.st_size)) == NULL) {
+    if ((buf = malloc(size)) == NULL) {
         pr_error("Failed to allocate ELF file data buffer\n");
         goto err;
     }
 
-    if (read(fd, buf, st.st_size) == -1) {
+    if (fread(buf, size, 1, fp) != 1) {
         pr_error("Failed to read %zu bytes from input file "
                         "\"%s\": %d (%s)\n",
-                (size_t)st.st_size, path, errno, strerror(errno)
+                (size_t)size, path, errno, strerror(errno)
         );
         goto err;
     }
 
-    if (close(fd)) {
-        pr_error("Failed to close the input file fd: %d (%s)\n",
+    if (fclose(fp)) {
+        pr_error("Failed to close the input file: %d (%s)\n",
                 errno, strerror(errno));
-        fd = -1;
+        fp = NULL;
         goto err;
     }
-    fd = -1;
+    fp = NULL;
 
     out->data = buf; buf = NULL;
-    out->size = st.st_size;
+    out->size = size;
 
     return 0;
 
@@ -556,12 +559,12 @@ err:
         buf = NULL;
     }
 
-    if (fd != -1) {
-        if (close(fd)) {
-            pr_error("Failed to close the input file fd: %d (%s)\n",
+    if (fp != NULL) {
+        if (fclose(fp)) {
+            pr_error("Failed to close the input file: %d (%s)\n",
                     errno, strerror(errno));
         }
-        fd = -1;
+        fp = NULL;
     }
 
     return 1;
@@ -2762,10 +2765,9 @@ static int serialize_elf(struct elf *elf)
 
 static int write_elf(const struct elf *elf, const char *path)
 {
-    int fd = -1;
+    FILE *fp = NULL;
 
-
-    if ((fd = open(path, O_RDWR | O_CLOEXEC | O_TRUNC | O_CREAT, 0644)) == -1) {
+    if ((fp = fopen(path, "wb")) == NULL) {
         pr_error("Failed to open output file \"%s\": %d (%s)\n",
                 path, errno, strerror(errno));
         goto err;
@@ -2778,17 +2780,16 @@ static int write_elf(const struct elf *elf, const char *path)
         goto err;
     }
 
-    if (write(fd, elf->data.data, elf->data.size) == -1) {
-        fprintf(stderr,
-                "Failed to write to output file \"%s\": %d (%s)\n",
+    if (fwrite(elf->data.data, elf->data.size, 1, fp) != 1) {
+        pr_error("Failed to write to output file \"%s\": %d (%s)\n",
                 path, errno, strerror(errno));
         goto err;
     }
 
-    if (close(fd)) {
-        pr_error("Failed to close the output fd: %d (%s)\n",
+    if (fclose(fp)) {
+        pr_error("Failed to close the output file: %d (%s)\n",
                 errno, strerror(errno));
-        fd = -1;
+        fp = NULL;
         goto err;
     }
 
@@ -2796,12 +2797,12 @@ static int write_elf(const struct elf *elf, const char *path)
     return 0;
 
 err:
-    if (fd != -1) {
-        if (close(fd)) {
-            pr_error("Failed to close the output fd: %d (%s)\n",
+    if (fp != NULL) {
+        if (fclose(fp)) {
+            pr_error("Failed to close the output file: %d (%s)\n",
                     errno, strerror(errno));
         }
-        fd = -1;
+        fp = NULL;
     }
 
     return 1;

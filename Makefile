@@ -63,38 +63,38 @@ COL_RESET=[0m
 all: CFLAGS = -ggdb -O0 -Wall
 all: $(OBJDIR) $(BINDIR) $(EXE)
 
-release: CFLAGS = -O3 -Wall -Werror
+release: CFLAGS = -O3 -Wall -Werror -DBUILD_TYPE_RELEASE
 release: clean $(OBJDIR) $(BINDIR) $(EXE) tests mostlyclean strip
 
 br: all run
 
 $(EXE): $(OBJS)
 #@$(DEBUGSTRIP) $(STRIP_OBJS) 2>/dev/null
-	@$(PRINTF) "CCLD 	%-20s %-20s\n" "$(EXE)" "<= $^"
+	@$(PRINTF) "CCLD 	%-30s %-30s\n" "$(EXE)" "<= $^"
 	@$(CCLD) $(LDFLAGS) -o $(EXE) $(OBJS) $(LIBS)
 
 $(TEST_LIB): $(BINDIR) $(TEST_LIB_SRC) Makefile
-	@$(PRINTF) "CCLD	%-20s %-20s\n" "$(TEST_LIB)" "<= $(TEST_LIB_SRC)"
+	@$(PRINTF) "CCLD	%-30s %-30s\n" "$(TEST_LIB)" "<= $(TEST_LIB_SRC)"
 	@$(CCLD) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(SO_LDFLAGS) -o $(TEST_LIB) $(TEST_LIB_SRC)
 
 $(TEST_LIB32): $(BINDIR) $(TEST_LIB_SRC) Makefile
-	@$(PRINTF) "CCLD32	%-20s %-20s\n" "$(TEST_LIB32)" "<= $(TEST_LIB_SRC)"
+	@$(PRINTF) "CCLD32	%-30s %-30s\n" "$(TEST_LIB32)" "<= $(TEST_LIB_SRC)"
 	@$(CCLD32) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(SO_LDFLAGS) -o $(TEST_LIB32) $(TEST_LIB_SRC)
 
 $(TEST_EXE): $(BINDIR) $(TEST_LIB) $(TEST_LIB_COPY) $(TEST_EXE_SRC) Makefile
-	@$(PRINTF) "CCLD	%-20s %-20s\n" "$(TEST_EXE)" "<= $(TEST_EXE_SRC) $(TEST_LIB)"
+	@$(PRINTF) "CCLD	%-30s %-30s\n" "$(TEST_EXE)" "<= $(TEST_EXE_SRC) $(TEST_LIB)"
 	@$(CCLD) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(TEST_LIB) -o $(TEST_EXE) $(TEST_EXE_SRC)
 
 $(TEST_EXE32): $(BINDIR) $(TEST_LIB32) $(TEST_LIB32_COPY) $(TEST_EXE_SRC) Makefile
-	@$(PRINTF) "CCLD32	%-20s %-20s\n" "$(TEST_EXE32)" "<= $(TEST_EXE_SRC) $(TEST_LIB32)"
+	@$(PRINTF) "CCLD32	%-30s %-30s\n" "$(TEST_EXE32)" "<= $(TEST_EXE_SRC) $(TEST_LIB32)"
 	@$(CCLD32) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(TEST_LIB32) -o $(TEST_EXE32) $(TEST_EXE_SRC)
 
 $(TEST_LIB_COPY): $(TEST_LIB)
-	@$(PRINTF) "CP	%-20s %-20s\n" "$(TEST_LIB)" "=> $(TEST_LIB_COPY)"
+	@$(PRINTF) "CP	%-30s %-30s\n" "$(TEST_LIB)" "=> $(TEST_LIB_COPY)"
 	@$(CP) $(TEST_LIB) $(TEST_LIB_COPY)
 
 $(TEST_LIB32_COPY): $(TEST_LIB32)
-	@$(PRINTF) "CP	%-20s %-20s\n" "$(TEST_LIB32)" "=> $(TEST_LIB32_COPY)"
+	@$(PRINTF) "CP	%-30s %-30s\n" "$(TEST_LIB32)" "=> $(TEST_LIB32_COPY)"
 	@$(CP) $(TEST_LIB32) $(TEST_LIB32_COPY)
 
 $(OBJDIR):
@@ -110,18 +110,18 @@ $(TEST_EXE_DIR):
 	@$(MKDIR) $(TEST_EXE_DIR)
 
 $(OBJDIR)/%.o: ./%.c Makefile
-	@$(PRINTF) "CC 	%-20s %-20s\n" "$@" "<= $<"
+	@$(PRINTF) "CC 	%-30s %-30s\n" "$@" "<= $<"
 	@$(CC) $(DEPFLAGS) $(COMMON_CFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(OBJDIR)/%.o: */%.c Makefile
-	@$(PRINTF) "CC 	%-20s %-20s\n" "$@" "<= $<"
+	@$(PRINTF) "CC 	%-30s %-30s\n" "$@" "<= $<"
 	@$(CC) $(DEPFLAGS) $(COMMON_CFLAGS) $(CFLAGS) -c -o $@ $<
 
 tests: CFLAGS = -ggdb -O0 -Wall
 tests: $(OBJDIR) $(BINDIR) $(EXE) build-tests
 	@n_passed=0; \
 	for i in $(TEST_EXE) $(TEST_EXE32) $(RUN_CMDLINE) $(RUN32_CMDLINE) $(TEST_EXE) $(TEST_EXE32); do \
-		$(PRINTF) "EXEC	%-20s " "$$i"; \
+		$(PRINTF) "EXEC	%-30s " "$$i"; \
 		if $$i; then \
 			$(PRINTF) "$(GREEN)OK$(COL_RESET)\n"; \
 			n_passed="$$((n_passed + 1))"; \

@@ -1,6 +1,10 @@
 #ifndef UTIL_H_
 #define UTIL_H_
 
+/**
+ * @file Various utilities.
+ */
+
 #include "elf.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,16 +23,44 @@ dummy_pr_debug__(const char *fmt, ...) { (void) fmt; }
 #define pr_debug printf
 #endif /* BUILDTYPE */
 
-/* Container for an array of bytes */
+/** @struct Generic container for an array of bytes */
 struct blob {
+    /** The size of `data` */
     uint64_t size;
+
+    /** The (usually malloc'd) buffer containing the bytes */
     uint8_t *data;
 };
 
+/**
+ * Reads a file into a newly allocated buffer.
+ *
+ * @param[in] path The path of the file to read.
+ *  Must not be NULL.
+ *
+ * @param[out] out An empty blob structure
+ *  to which the file contents will be copied.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int read_file(const char *path, struct blob *out);
 
+/**
+ * Writes a data buffer into a file.
+ *
+ * @param[in] path The path of the file to write to.
+ *  The file is created if it doesn't exist and truncated otherwise.
+ *  Must not be NULL.
+ *
+ * @param[in] data A blob structure containing the data to write.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int write_file(const char *path, const struct blob *data);
 
+/** Get the number of bits set in a uint64 (the population count) */
 static inline int popcnt(uint64_t x) {
     int ret = 0;
     for (int i = 0; i < 64; i++) {
@@ -38,6 +70,16 @@ static inline int popcnt(uint64_t x) {
     return ret;
 }
 
+/**
+ * Aligns (rounds up) a value to a power of 2.
+ *
+ * @param[in] x The value to align.
+ *
+ * @param[in] n The target value to align to.
+ *  Must be a power of two.
+ *
+ * @return The aligned value.
+ */
 static inline uint64_t align_pow2(uint64_t x, uint64_t n) {
     if (popcnt(n) != 1) {
         pr_error("%s: Not a power of two\n", __func__);
@@ -54,6 +96,10 @@ static inline uint64_t align_pow2(uint64_t x, uint64_t n) {
     return (x + (n - 1)) & ~(n - 1);
 }
 
+/**
+ * Checks whether two ranges intersect at any point.
+ * This function doesn't work for zero-sized ranges.
+ */
 static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
                                   uint64_t start2, uint64_t size2)
 {
@@ -70,13 +116,66 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
     return start1 < end2 && start2 < end1;
 }
 
+/**
+ * Attempts to find a PT_LOAD segment
+ * that contains a given virtual address range.
+ *
+ * @param[in] phdrs The parsed in-memory array of program headers to search.
+ *  Must not be NULL if `nphdrs > 0`.
+ *
+ * @param[in] nphdrs The number of entries in the `phdrs` array.
+ *
+ * @param[in] start The start of the range to check.
+ *
+ * @param[in] size The size (length) of the range to check.
+ *
+ * @return If a segment containing the full range is found,
+ *  the corresponding program header (a reference into `phdrs`).
+ *  If nothing valid is found, `NULL` is returned.
+ */
 const Elf64_Phdr * get_load_segment_containing_range(
         const Elf64_Phdr *phdrs, Elf64_Xword nphdrs,
         Elf64_Xword start, Elf64_Xword size
 );
 
+/**
+ * Finds the section name by the `sh_name` field of a section header.
+ *
+ * @param[in] elf A valid ELF context sucessfully populated by `read_elf`.
+ *  Must not be NULL.
+ *
+ * @param[in] sh_name The `sh_name` field of the section header
+ *  whose name string is to be found.
+ *
+ * @return A pointer into the ELF's `.shstrtab` section
+ *  where all the section names are, or an error message
+ *  if something goes wrong. This function never returns NULL.
+ */
 const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name);
 
+/**
+ * @brief
+ * Finds the largest virtual address and alignment of all PT_LOAD segments.
+ *
+ * This is used to allocate a new segment at the end of the address space.
+ *
+ * Note: It's assumed that the provided `elf->phdrs` are
+ * already validated to fit within the address space.
+ *
+ * This function finds the last byte of an already existing LOAD segment,
+ * which is why it can have no failure case and return `void`.
+ * It's up to the caller to align the returned value and check
+ * that there's enough room left in the address space to fit the new data.
+ *
+ * @param[in] elf The ELF context containing a parsed and validated
+ *  in-memory array of program headers. Must not be NULL.
+ *
+ * @param[out] out_vaddr Output pointer for the found virtual address
+ *  of the end of the last PT_LOAD segment. Must not be NULL.
+ *
+ * @param[out] out_align Output pointer for the found maximum aligment value.
+ *  Must not be NULL. The minimal returned "fallback" value is 4096.
+ */
 void find_load_segment_limits(const struct elf *elf,
                               uint64_t *out_vaddr, uint64_t *out_align);
 

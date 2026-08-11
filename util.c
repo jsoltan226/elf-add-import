@@ -9,6 +9,11 @@
 
 int read_file(const char *path, struct blob *out)
 {
+    if (path == NULL || out == NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
     FILE *fp = NULL;
     uint8_t *buf = NULL;
 
@@ -86,6 +91,11 @@ err:
 
 int write_file(const char *path, const struct blob *data)
 {
+    if (path == NULL || data == NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
     FILE *fp = NULL;
 
     if ((fp = fopen(path, "wb")) == NULL) {

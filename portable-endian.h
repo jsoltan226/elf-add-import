@@ -11,6 +11,11 @@
 // example on how to get the endian conversion functions on different
 // platforms.
 
+/**
+ * @file A portable version of the linux `endian.h` header.
+ *  Copied from the source above.
+ */
+
 #ifndef PORTABLE_ENDIAN_H__
 #define PORTABLE_ENDIAN_H__
 

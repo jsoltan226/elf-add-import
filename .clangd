@@ -1,0 +1,10 @@
+CompileFlags:
+  Add:
+    - "-Wall"
+    - "-Wpedantic"
+    - "-Wextra"
+    - "-xc"
+    - "-Wdocumentation"
+
+Documentation:
+  CommentFormat: Doxygen

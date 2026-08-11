@@ -1,7 +1,6 @@
 /obj/*
 /bin/*
 /Makefile.old
-/.clangd
 \;
 \\
 log.txt

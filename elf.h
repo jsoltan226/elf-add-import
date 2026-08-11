@@ -16,6 +16,11 @@
    License along with the GNU C Library; if not, see
    <https://www.gnu.org/licenses/>.  */
 
+/**
+ * @file The `elf.h` header file containing the ELF type, struct and enum
+ *  definitions. Copied from glibc.
+ */
+
 #ifndef _ELF_H
 #define	_ELF_H 1
 

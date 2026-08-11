@@ -70,7 +70,7 @@ int read_validate_dynamic_section(
         pr_error("Failed to parse the dynamic entry array\n");
         return 1;
     }
-    printf("Number of dynamic entries: %" PRIu64 "\n", dynnum);
+    pr_debug("Number of dynamic entries: %" PRIu64 "\n", dynnum);
 
     /** Locate the dynstr string table **/
     Elf64_Addr strtab_addr = 0;

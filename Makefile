@@ -4,6 +4,7 @@ AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
 COMMON_CFLAGS := -Wall -Wpedantic -Wextra -fPIC
+CFLAGS ?=
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP
 LDFLAGS?=-pie
@@ -60,10 +61,10 @@ COL_RESET=[0m
 .PHONY: all release strip clean mostlyclean update run br tests build-tests run-tests
 .NOTPARALLEL: all release br $(TEST_LIB) $(TEST_LIB32) $(TEST_EXE) $(TEST_EXE32)
 
-all: CFLAGS = -ggdb -O0 -Wall
+all: CFLAGS += -ggdb -O0 -Wall
 all: $(OBJDIR) $(BINDIR) $(EXE)
 
-release: CFLAGS = -O3 -Wall -Werror -DBUILD_TYPE_RELEASE
+release: CFLAGS += -O3 -Wall -Werror -DBUILD_TYPE_RELEASE
 release: clean $(OBJDIR) $(BINDIR) $(EXE) tests mostlyclean strip
 
 br: all run
@@ -117,11 +118,11 @@ $(OBJDIR)/%.o: */%.c Makefile
 	@$(PRINTF) "CC 	%-30s %-30s\n" "$@" "<= $<"
 	@$(CC) $(DEPFLAGS) $(COMMON_CFLAGS) $(CFLAGS) -c -o $@ $<
 
-tests: CFLAGS = -ggdb -O0 -Wall
+tests: CFLAGS += -ggdb -O0 -Wall
 tests: $(OBJDIR) $(BINDIR) $(EXE) build-tests
 	@n_passed=0; \
 	for i in $(TEST_EXE) $(TEST_EXE32) $(RUN_CMDLINE) $(RUN32_CMDLINE) $(TEST_EXE) $(TEST_EXE32); do \
-		$(PRINTF) "EXEC	%-30s " "$$i"; \
+		$(PRINTF) "EXEC	%s\n" "$$i"; \
 		if $$i; then \
 			$(PRINTF) "$(GREEN)OK$(COL_RESET)\n"; \
 			n_passed="$$((n_passed + 1))"; \

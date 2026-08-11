@@ -86,13 +86,37 @@ int read_validate_shdrs(const struct blob *data, struct elf_shdrs *out,
 /**
  * @brief The main top-level ELF parsing function.
  *
- * Reads, parses and validates an ELF file located at `path`,
- * using the above functions as well as `read_validate_dynamic_section`.
+ * Parses and validates ELF file data using the above functions
+ * as well as `read_validate_dynamic_section`.
+ *
+ * @param[in] data The ELF data to parse. Must not be NULL.
+ *
+ * @param[out] out Output pointer.
+ *  Can be NULL, in which case the ELF file is only validated,
+ *  without any side effects.
+ *  If non-NULL and the function succeeds, it is populated with a
+ *  valid `struct elf` and should later be freed with `destroy_elf`.
+ *
+ * @param[in] move Whether the new ELF context should take ownership of `data`.
+ *  If true, `data->arr` must be a malloc'd array of size `data->size`
+ *  and it must not be used after this function successfully returns.
+ *  If false, a new buffer buffer is allocated for `out`
+ *  and `data` is copied into it.
+ *
+ *  Note: On failure, `data` is NOT invalidated even if `move == true`
+ *  and should still be freed manually.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int parse_elf(struct blob *data, struct elf *out, bool move);
+
+/**
+ * Reads an ELF file and parses it using `parses_elf`.
  *
  * @param[in] path The path to the ELF file to load. Must not be NULL.
  *
  * @param out Output pointer.
- *  Can be NULL, in which case the ELF file is only validated,
+ *  Can be NULL, in which case the ELF file is read and only validated,
  *  without any side effects.
  *  If non-NULL and the function succeeds, it is populated with a
  *  valid `struct elf` and should later be freed with `destroy_elf`.

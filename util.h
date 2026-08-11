@@ -117,6 +117,25 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
 }
 
 /**
+ * Wrapper for `realloc`.
+ *
+ * Calls `realloc(*ptr_p, new_n * size)` in a safe way.
+ * If anything fails, `ptr` is freed if needed.
+ *
+ * @param ptr The pointer to realloc. Just like with `realloc`, can be NULL.
+ *  Note: After this call, `ptr` becomes invalid and the returned value
+ *  should be used instead.
+ *
+ * @param new_n Like `calloc`'s `n` parameter;
+ *  the desired new number of array entries.
+ *
+ * @param size Like `calloc`'s `size parameter; size of the type.
+ *
+ * @return The new realloc'd pointer on success, non-zero on failure.
+ */
+void * safe_realloc(void *ptr, size_t new_n, size_t size);
+
+/**
  * Attempts to find a PT_LOAD segment
  * that contains a given virtual address range.
  *
@@ -175,6 +194,7 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name);
  *
  * @param[out] out_align Output pointer for the found maximum aligment value.
  *  Must not be NULL. The minimal returned "fallback" value is 4096.
+ *  Due to the spec's requirements, the returned value is always a power of two.
  */
 void find_load_segment_limits(const struct elf *elf,
                               uint64_t *out_vaddr, uint64_t *out_align);

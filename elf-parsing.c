@@ -556,41 +556,54 @@ no_headers:
     return ret;
 }
 
-int read_elf(const char *path, struct elf *out)
+int parse_elf(struct blob *data, struct elf *out, bool move)
 {
+    if (data == NULL || data->data == NULL) {
+        pr_error("`data` is NULL\n");
+        return -1;
+    }
+
     struct elf e = { 0 };
     memset(&e, 0, sizeof(struct elf));
 
-    if (read_file(path, &e.data)) {
-        pr_error("Couldn't read input file \"%s\"\n", path);
-        goto err;
-    }
-
-    if (read_validate_ident(&e.data, &e.ident)) {
-        pr_error("File \"%s\" is not an ELF file!\n", path);
+    if (read_validate_ident(data, &e.ident)) {
+        pr_error("Not an ELF file (invalid magic)\n");
         goto err;
     }
     const int c = e.ident.clazz;
     const int d = e.ident.data;
 
-    if (read_validate_ehdr(&e.data, c, d, &e.ehdr)) {
-        pr_error("Invalid ELF header in file \"%s\"\n", path);
+    if (read_validate_ehdr(data, c, d, &e.ehdr)) {
+        pr_error("Invalid ELF header\n");
         goto err;
     }
 
-    if (read_validate_phdrs(&e.data, &e.phdrs, &e.ehdr, c, d)) {
-        pr_error("Invalid program headers in file \"%s\"\n", path);
+    if (read_validate_phdrs(data, &e.phdrs, &e.ehdr, c, d)) {
+        pr_error("Invalid program headers\n");
         goto err;
     }
 
-    if (read_validate_shdrs(&e.data, &e.shdrs, &e.ehdr, c, d)) {
-        pr_error("Invalid section headers in file \"%s\"\n", path);
+    if (read_validate_shdrs(data, &e.shdrs, &e.ehdr, c, d)) {
+        pr_error("Invalid section headers\n");
         goto err;
     }
 
-    if (read_validate_dynamic_section(&e.data, c, d, &e.phdrs, &e.shdrs, &e.dyn)) {
-        pr_error("Invalid or missing dynamic section in file \"%s\"\n", path);
+    if (read_validate_dynamic_section(data, c, d, &e.phdrs, &e.shdrs, &e.dyn)) {
+        pr_error("Invalid or missing dynamic segment\n");
         goto err;
+    }
+
+    if (move) {
+        e.data = *data;
+        *data = (struct blob) { .data = NULL, .size =0 };
+    } else {
+        e.data.size = data->size;
+        e.data.data = malloc(data->size);
+        if (e.data.data == NULL) {
+            pr_error("Failed to allocate a copy of the data\n");
+            goto err;
+        }
+        memcpy(e.data.data, data->data, data->size);
     }
 
     if (out != NULL)
@@ -598,16 +611,34 @@ int read_elf(const char *path, struct elf *out)
     else
         destroy_elf(&e);
 
-    printf("Successfully read and parsed ELF%s-%s file \"%s\"\n",
+    printf("Successfully parsed ELF%s-%s data\n",
            (c == ELFCLASS32 ? "32" : "64"),
-           (d == ELFDATA2MSB ? "BE" : "LE"),
-           path
+           (d == ELFDATA2MSB ? "BE" : "LE")
     );
     return 0;
 
 err:
     destroy_elf(&e);
     return 1;
+}
+
+int read_elf(const char *path, struct elf *out)
+{
+    struct blob data = { 0 };
+    if (read_file(path, &data)) {
+        pr_error("Couldn't read input file \"%s\"\n", path);
+        return 1;
+    }
+
+    if (parse_elf(&data, out, true)) {
+        pr_error("Couldn't parse ELF file \"%s\"\n", path);
+        free(data.data);
+        data = (struct blob) { 0 };
+        return 1;
+    }
+
+    data = (struct blob) { 0 };
+    return 0;
 }
 
 static int read_validate_ident(const struct blob *data, struct elf_ident *out)

@@ -137,6 +137,30 @@ err:
     return 1;
 }
 
+void * safe_realloc(void *ptr, size_t new_n, size_t size)
+{
+    if (size == 0 || new_n == 0) {
+        pr_error("%s: Invalid new size (0)\n", __func__);
+        if (ptr) free(ptr);
+        return NULL;
+    } else if (new_n > SIZE_MAX / size) {
+        pr_error("%s: Size %zu*%zu too large (integer overflow)\n",
+                 __func__, new_n, size);
+        if (ptr) free(ptr);
+        return NULL;
+    }
+
+    void *tmp = realloc(ptr, new_n * size);
+    if (tmp == NULL) {
+        pr_error("%s: Failed to realloc to size %zu\n",
+                 __func__, new_n * size);
+        if (ptr) free(ptr);
+        return NULL;
+    }
+
+    return tmp;
+}
+
 const Elf64_Phdr * get_load_segment_containing_range(
         const Elf64_Phdr *phdrs, Elf64_Xword nphdrs,
         Elf64_Xword start, Elf64_Xword size

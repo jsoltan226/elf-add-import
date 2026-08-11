@@ -36,14 +36,11 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
     const size_t prevsz = phdrs->num * sizeof(Elf64_Phdr);
     const size_t newsz = new_size * sizeof(Elf64_Phdr);
 
+    if ((phdrs->arr = safe_realloc(phdrs->arr, new_size, sizeof(Elf64_Phdr)))
+            == NULL)
     {
-        /* `realloc(NULL, sz)` is equivalent to `malloc(sz)` */
-        void *tmp = realloc(phdrs->arr, newsz);
-        if (tmp == NULL) {
-            pr_error("Failed to resize (realloc) the program headers array\n");
-            goto err;
-        }
-        phdrs->arr = tmp;
+        pr_error("Failed to resize (realloc) the program headers array\n");
+        goto err;
     }
     /* append zeroized entries if growing */
     if (newsz > prevsz)
@@ -97,26 +94,20 @@ int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
     }
 
     /** Resize the `shdrs` array **/
+    if ((shdrs->arr = safe_realloc(shdrs->arr, new_size, sizeof(Elf64_Shdr)))
+            == NULL)
+    {
+        pr_error("Failed to resize (realloc) the section headers array\n");
+        goto err;
+    }
+    /* checked by `safe_realloc` */
+    const size_t newsz = new_size * sizeof(Elf64_Shdr);
+
     if (shdrs->num > SIZE_MAX / sizeof(Elf64_Shdr)) {
         pr_error("%s: Old size too large (integer overflow)\n", __func__);
         goto err;
     }
-    if (new_size > SIZE_MAX / sizeof(Elf64_Shdr)) {
-        pr_error("%s: New size too large (integer overflow)\n", __func__);
-        goto err;
-    }
     const size_t prevsz = shdrs->num * sizeof(Elf64_Shdr);
-    const size_t newsz = new_size * sizeof(Elf64_Shdr);
-
-    {
-        /* `realloc(NULL, sz)` is equivalent to `malloc(sz)` */
-        void *tmp = realloc(shdrs->arr, newsz);
-        if (tmp == NULL) {
-            pr_error("Failed to resize (realloc) the section headers array\n");
-            goto err;
-        }
-        shdrs->arr = tmp;
-    }
      /* append zeroized entries if growing */
     if (newsz > prevsz)
         memset((uint8_t *)shdrs->arr + prevsz, 0, newsz - prevsz);

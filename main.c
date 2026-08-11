@@ -7,7 +7,9 @@
 #include <string.h>
 #include <inttypes.h>
 
+#ifndef SUS_REPLACEMENT_STRING
 #define SUS_REPLACEMENT_STRING "TEST"
+#endif /* SUS_REPLACEMENT_STRING */
 static int modify_and_move_program_headers(struct elf *elf);
 
 static void list_sections(const struct elf *elf);
@@ -40,6 +42,14 @@ int main(int argc, char **argv)
 
     if (serialize_elf(&elf))
         goto err;
+
+    /* validate the newly serialized ELF */
+    printf("Validating patched data... ");
+    if (parse_elf(&elf.data, NULL, false)) {
+        printf("Sanity check failed\n");
+        goto err;
+    }
+
     if (write_file(argv[2], &elf.data))
         goto err;
 
@@ -54,7 +64,7 @@ err:
 static void list_sections(const struct elf *elf)
 {
     for (Elf64_Xword i = 0; i < elf->shdrs.num; i++) {
-        const Elf64_Shdr *shdr = &elf->shdrs.arr[i];
+        const Elf64_Shdr *const shdr = &elf->shdrs.arr[i];
 
         pr_debug("Section: %-20s \"%s\"\n",
                  section_type_toString(shdr->sh_type),
@@ -143,13 +153,11 @@ static int modify_and_move_program_headers(struct elf *elf)
     }
     const size_t new_data_size = new_phoff + new_phsize;
 
+    if ((elf->data.data = safe_realloc(elf->data.data, new_data_size, 1))
+            == NULL)
     {
-        void *tmp = realloc(elf->data.data, new_data_size);
-        if (tmp == NULL) {
-            pr_error("Failed to grow (realloc) the ELF file data\n");
-            return 1;
-        }
-        elf->data.data = tmp;
+        pr_error("Failed to grow (realloc) the ELF file data\n");
+        return 1;
     }
     memset(elf->data.data + elf->data.size, 0, new_data_size - elf->data.size);
     elf->data.size = new_data_size;

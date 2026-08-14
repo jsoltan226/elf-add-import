@@ -3,6 +3,7 @@
 #include "ctx.h"
 #include "util.h"
 #include "elf-types.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
@@ -225,7 +226,7 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
     return 0;
 }
 
-int serialize_elf(struct elf *elf)
+int serialize_elf(struct elf *elf, bool reset_dirty_flags)
 {
     const int c = elf->ident.clazz, d = elf->ident.data;
 
@@ -237,6 +238,7 @@ int serialize_elf(struct elf *elf)
             return 1;
         }
         printf("Successfully rewrote ELF header\n");
+        if (reset_dirty_flags) elf->ehdr_dirty = false;
     }
 
     pr_debug("Program headers dirty: %d\n", !!elf->phdrs.dirty);
@@ -250,6 +252,7 @@ int serialize_elf(struct elf *elf)
             return 1;
         }
         printf("Successfully rewrote program headers\n");
+        if (reset_dirty_flags) elf->phdrs.dirty = false;
     }
 
     pr_debug("Section headers dirty: %d\n", !!elf->shdrs.dirty);
@@ -263,6 +266,7 @@ int serialize_elf(struct elf *elf)
             return 1;
         }
         printf("Successfully rewrote section headers\n");
+        if (reset_dirty_flags) elf->shdrs.dirty = false;
     }
 
     pr_debug("Dynamic entries dirty: %d\n", !!elf->dyn.entries.dirty);
@@ -274,9 +278,11 @@ int serialize_elf(struct elf *elf)
                           sizeof(Elf64_Dyn), fileentsize,
                           elf->dyn.phdr->p_offset, elf->dyn.entries.num, c, d))
         {
-            pr_error("Failed to serialize the dynamic section\n");
+            pr_error("Failed to serialize the dynamic entries\n");
             return 1;
         }
+        printf("Successfully rewrote the dynamic entries\n");
+        if (reset_dirty_flags) elf->dyn.entries.dirty = false;
     }
 
     return 0;

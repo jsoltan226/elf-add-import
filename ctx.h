@@ -127,6 +127,11 @@ struct elf {
     struct blob data;
 };
 
+/**
+ * Destroys an ELF context, freeing any associated resources.
+ *
+ * @param[in,out] elf The ELF context to destroy.
+ */
 void destroy_elf(struct elf *elf);
 
 #endif /* CTX_H_ */

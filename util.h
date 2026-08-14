@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 struct elf;
 
@@ -60,14 +61,9 @@ int read_file(const char *path, struct blob *out);
  */
 int write_file(const char *path, const struct blob *data);
 
-/** Get the number of bits set in a uint64 (the population count) */
-static inline int popcnt(uint64_t x) {
-    int ret = 0;
-    for (int i = 0; i < 64; i++) {
-        if (x & (UINT64_C(1) << i))
-            ret++;
-    }
-    return ret;
+/** Check whether a number is a power of two */
+static inline bool is_pow2(uint64_t x) {
+    return x != 0 && (x & (x - 1)) == 0;
 }
 
 /**
@@ -81,8 +77,9 @@ static inline int popcnt(uint64_t x) {
  * @return The aligned value.
  */
 static inline uint64_t align_pow2(uint64_t x, uint64_t n) {
-    if (popcnt(n) != 1) {
-        pr_error("%s: Not a power of two\n", __func__);
+    if (!is_pow2(n)) {
+        pr_error("%s: Target value (%" PRIu64 ") is not a power of two\n",
+                 __func__, n);
         fflush(stderr);
         abort();
     }
@@ -119,17 +116,19 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
 /**
  * Wrapper for `realloc`.
  *
- * Calls `realloc(*ptr_p, new_n * size)` in a safe way.
+ * Calls `realloc(ptr, new_n * size)` in a safe way.
  * If anything fails, `ptr` is freed if needed.
  *
- * @param ptr The pointer to realloc. Just like with `realloc`, can be NULL.
- *  Note: After this call, `ptr` becomes invalid and the returned value
- *  should be used instead.
+ * @param[in] ptr The pointer to be realloc'd.
+ *  If NULL, the behavior is the same as with standard `realloc` -
+ *  the call is equivalent to `malloc(new_n * size)`.
+ *  Note: After this call, the original `ptr` becomes invalid
+ *  and the returned value should be used instead.
  *
- * @param new_n Like `calloc`'s `n` parameter;
+ * @param[in] new_n Like `calloc`'s `n` parameter;
  *  the desired new number of array entries.
  *
- * @param size Like `calloc`'s `size parameter; size of the type.
+ * @param[in] size Like `calloc`'s `size parameter; size of the type.
  *
  * @return The new realloc'd pointer on success, non-zero on failure.
  */

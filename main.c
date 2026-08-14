@@ -40,7 +40,7 @@ int main(int argc, char **argv)
     if (modify_and_move_program_headers(&elf))
         goto err;
 
-    if (serialize_elf(&elf))
+    if (serialize_elf(&elf, true))
         goto err;
 
     /* validate the newly serialized ELF */

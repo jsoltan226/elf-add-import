@@ -37,8 +37,8 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
     const size_t prevsz = phdrs->num * sizeof(Elf64_Phdr);
     const size_t newsz = new_size * sizeof(Elf64_Phdr);
 
-    if ((phdrs->arr = safe_realloc(phdrs->arr, new_size, sizeof(Elf64_Phdr)))
-            == NULL)
+    if ((phdrs->arr = safe_realloc((void **)&phdrs->arr,
+                                   new_size, sizeof(Elf64_Phdr))) == NULL)
     {
         pr_error("Failed to resize (realloc) the program headers array\n");
         goto err;
@@ -95,8 +95,8 @@ int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
     }
 
     /** Resize the `shdrs` array **/
-    if ((shdrs->arr = safe_realloc(shdrs->arr, new_size, sizeof(Elf64_Shdr)))
-            == NULL)
+    if ((shdrs->arr = safe_realloc((void **)&shdrs->arr,
+                                   new_size, sizeof(Elf64_Shdr))) == NULL)
     {
         pr_error("Failed to resize (realloc) the section headers array\n");
         goto err;

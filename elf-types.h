@@ -266,11 +266,18 @@ int write_dyn(struct blob *data, uint64_t *off_p,
 const char * elf_type_toString(Elf64_Half et);
 
 /**
+ * Returns a string with the name of the PT_* program header type
+ * corresponding to the integer valu `pt` or "(unknown)" if one isn't found.
+ * Never returns NULL.
+ */
+const char * program_header_type_toString(Elf64_Word pt);
+
+/**
  * Returns a string with the name of the SHT_* section header type
  * corresponding to the integer value `sht` or "(unknown)" if one isn't found.
  * Never returns NULL.
  */
-const char * section_type_toString(Elf64_Word sht);
+const char * section_header_type_toString(Elf64_Word sht);
 
 /**
  * Returns a string with the name of the DT_* dynamic entry type

@@ -137,28 +137,36 @@ err:
     return 1;
 }
 
-void * safe_realloc(void *ptr, size_t new_n, size_t size)
+void * safe_realloc(void **ptr_p, size_t new_n, size_t size)
 {
     if (size == 0 || new_n == 0) {
         pr_error("%s: Invalid new size (0)\n", __func__);
-        if (ptr) free(ptr);
-        return NULL;
+        goto err;
     } else if (new_n > SIZE_MAX / size) {
         pr_error("%s: Size %zu*%zu too large (integer overflow)\n",
                  __func__, new_n, size);
-        if (ptr) free(ptr);
-        return NULL;
+        goto err;
     }
 
-    void *tmp = realloc(ptr, new_n * size);
+    void *const ptr = ptr_p != NULL ? *ptr_p : NULL;
+    const size_t newsize = new_n * size;
+
+    void *tmp = realloc(ptr, newsize);
     if (tmp == NULL) {
-        pr_error("%s: Failed to realloc to size %zu\n",
-                 __func__, new_n * size);
-        if (ptr) free(ptr);
-        return NULL;
+        pr_error("%s: Failed to realloc to size %zu\n", __func__, newsize);
+        goto err;
     }
 
+    if (ptr_p != NULL) *ptr_p = NULL;
     return tmp;
+
+err:
+    if (ptr_p != NULL && *ptr_p != NULL) {
+        free(*ptr_p);
+        *ptr_p = NULL;
+    }
+
+    return NULL;
 }
 
 const Elf64_Phdr * get_load_segment_containing_range(
@@ -190,6 +198,7 @@ const Elf64_Phdr * get_load_segment_containing_range(
 const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
 {
     if (elf == NULL || elf->shdrs.arr == NULL ||
+        elf->ehdr.e_shstrndx == SHN_UNDEF ||
         elf->shstrndx >= elf->shdrs.num)
     {
         return "N/A (missing or invalid shstrtab section)";

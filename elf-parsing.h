@@ -37,12 +37,15 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
  *
  * @param[in] data The buffer to read from. Must not be NULL.
  *
- * @param[out] out Output pointer.
- *  If NULL, only validation will be performed without writing anything.
+ * @param[out] out Output pointer. Must not be NULL.
  *
  * @param[in] ehdr The parsed ELF header which contains information
  *  about the offset and size of the program header table.
  *  Must not be NULL.
+ *
+ * @param[in] shdrs The parsed section headers,
+ *  used when `e_phnum == PN_XNUM` (see the ELF spec).
+ *  Must not be NULL, although the array inside may theoretically be empty.
  *
  * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
  *
@@ -52,7 +55,8 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
  * @return 0 on success, non-zero on failure.
  */
 int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
-                        const Elf64_Ehdr *ehdr, int clazz, int encoding);
+                        const Elf64_Ehdr *ehdr, const struct elf_shdrs *shdrs,
+                        int clazz, int encoding);
 
 /**
  * @brief Reads, parses and validates the section header table (shdrs).
@@ -66,10 +70,13 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
  *
  * @param[in] data The buffer to read from. Must not be NULL.
  *
- * @param[out] out Output pointer.
- *  If NULL, only validation is performed without writing anything.
+ * @param[out] out Output pointer for the parsed section header table.
+ *  Must not be NULL.
  *
- * @param[in]  ehdr The parsed ELF header which contains information
+ * @param[out] out_shstrndx Output pointer for the real value of shstrndx.
+ *  Must not be NULL.
+ *
+ * @param[in] ehdr The parsed ELF header which contains information
  *  about the offset and size of the section header table.
  *  Must not be NULL.
  *
@@ -80,7 +87,8 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
  *
  * @return 0 on success, non-zero on failure.
  */
-int read_validate_shdrs(const struct blob *data, struct elf_shdrs *out,
+int read_validate_shdrs(const struct blob *data,
+                        struct elf_shdrs *out, Elf64_Word *out_shstrndx,
                         const Elf64_Ehdr *ehdr, int clazz, int encoding);
 
 /**

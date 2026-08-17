@@ -67,7 +67,7 @@ static void list_sections(const struct elf *elf)
         const Elf64_Shdr *const shdr = &elf->shdrs.arr[i];
 
         pr_debug("Section: %-20s \"%s\"\n",
-                 section_type_toString(shdr->sh_type),
+                 section_header_type_toString(shdr->sh_type),
                  section_name_strptr(elf, shdr->sh_name)
         );
     }
@@ -153,8 +153,8 @@ static int modify_and_move_program_headers(struct elf *elf)
     }
     const size_t new_data_size = new_phoff + new_phsize;
 
-    if ((elf->data.data = safe_realloc(elf->data.data, new_data_size, 1))
-            == NULL)
+    if ((elf->data.data = safe_realloc((void **)&elf->data.data,
+                                       new_data_size, 1)) == NULL)
     {
         pr_error("Failed to grow (realloc) the ELF file data\n");
         return 1;

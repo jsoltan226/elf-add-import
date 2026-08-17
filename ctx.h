@@ -50,7 +50,7 @@ struct elf {
      * This special section contains the section name strings themselves.
      *
      * Note: this is the real index, including any `SHN_XINDEX` shenanigans.
-     * See `update_shstrndx` if you want to update this value.
+     * Use `update_shstrndx` if you want to update this value.
      */
     Elf64_Word shstrndx;
 

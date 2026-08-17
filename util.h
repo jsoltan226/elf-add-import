@@ -114,15 +114,17 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
 }
 
 /**
- * Wrapper for `realloc`.
+ * Wrapper for `realloc` which frees `ptr` on failure.
  *
- * Calls `realloc(ptr, new_n * size)` in a safe way.
- * If anything fails, `ptr` is freed if needed.
+ * Calls `realloc(ptr, new_n * size)` in a safe way; by checking for
+ * integer overflow (`new_n * size`), like the GNU-specific `reallocarray`.
+ * If the check or `realloc` itself fail, `ptr` is freed if not previously NULL.
  *
- * @param[in] ptr The pointer to be realloc'd.
- *  If NULL, the behavior is the same as with standard `realloc` -
+ * @param[in] ptr_p Pointer to the pointer to be realloc'd.
+ *  If `ptr_p == NULL || *ptr_p == NULL`,
+ *  the behavior is the same as with standard `realloc` -
  *  the call is equivalent to `malloc(new_n * size)`.
- *  Note: After this call, the original `ptr` becomes invalid
+ *  Note: After this call, the original `*ptr_p` is set to NULL
  *  and the returned value should be used instead.
  *
  * @param[in] new_n Like `calloc`'s `n` parameter;
@@ -130,9 +132,9 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
  *
  * @param[in] size Like `calloc`'s `size parameter; size of the type.
  *
- * @return The new realloc'd pointer on success, non-zero on failure.
+ * @return The new realloc'd pointer on success, NULL on failure.
  */
-void * safe_realloc(void *ptr, size_t new_n, size_t size);
+void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
 
 /**
  * Attempts to find a PT_LOAD segment

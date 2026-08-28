@@ -15,10 +15,13 @@
  *
  * @param[in,out] phdrs The program headers array to resize.
  *
- * @param[in] new_size Desired new count of program headers.
+ * @param[in] new_phnum Desired new count of program headers.
  *  Must be greater than zero, because otherwise the program headers
  *  would have to be removed altogether, which would require
  *  `e_phoff` be set to `0` which is out of the scope of this function.
+ *
+ * @param[in] phentsize The value of the `e_phentsize` field of the ELF header
+ *  (`sizeof(Elf32_Phdr)` or `sizeof(Elf64_Phdr)`).
  *
  * @param[out] out_ehdr_e_phnum_p Output pointer for the new value
  *  of an `Elf64_Ehdr`'s `e_phnum` field (this might be different
@@ -32,7 +35,8 @@
  *
  * @return 0 on success, non-zero on failure.
  */
-int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
+int update_phnum(struct elf_phdrs *phdrs,
+                 Elf64_Xword new_phnum, Elf64_Half phentsize,
                  Elf64_Half *out_ehdr_e_phnum_p, struct elf_shdrs *shdrs);
 
 /**
@@ -41,10 +45,13 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
  *
  * @param[in,out] shdrs The section headers array to resize.
  *
- * @param[in] new_size Desired new count of section headers.
+ * @param[in] new_shnum Desired new count of section headers.
  *  Must be greater than zero, because otherwise the section headers
  *  would have to be removed altogether, which would require
  *  `e_shoff` be set to `0` which is out of the scope of this function.
+ *
+ * @param[in] shentsize The value of the `e_shentsize` field of the ELF header
+ *  (`sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)`).
  *
  * @param[out] out_ehdr_e_shnum_p Output pointer for the new value
  *  of an `Elf64_Ehdr`'s `e_shnum` field (this might be different
@@ -52,8 +59,8 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
  *
  * @return 0 on success, non-zero on failure.
  */
-int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
-                 Elf64_Half *out_ehdr_e_shnum_p);
+int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_shnum,
+                 Elf64_Half shentsize, Elf64_Half *out_ehdr_e_shnum_p);
 
 /**
  * Updates the section header string table index
@@ -75,6 +82,10 @@ int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
  */
 int update_shstrndx(Elf64_Word val, Elf64_Word *out,
                     Elf64_Half *out_ehdr_shstrndx_p, struct elf_shdrs *shdrs);
+
+int update_dynstr_range(Elf64_Addr new_addr, Elf64_Xword new_size,
+                        struct elf_dynamic *dyn,
+                        struct elf_shdrs *shdrs, const struct elf_phdrs *phdrs);
 
 /**
  * @func

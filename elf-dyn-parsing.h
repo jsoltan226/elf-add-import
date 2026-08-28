@@ -17,17 +17,19 @@
  * but if a SHT_DYNAMIC section is found it will be checked
  * against the data in the PT_DYNAMIC program header.
  *
- * @param[in] @NotNull data The ELF file data.
+ * @param[in] data The ELF file data. Must not be NULL.
  *
  * @param[in] clazz The ELF file class (ELFCLASS32 or ELFCLASS64).
  *
  * @param[in] encoding The ELF file data encoding (ELFDATA2MSB or ELFDATA2LSB).
  *
- * @param[in] @NotNull phdrs Array of parsed and validated program headers.
+ * @param[in] phdrs Array of parsed and validated program headers.
+ *  Must not be NULL.
  *
- * @param[in] @NotNull shdrs Array of parsed and validated section haeders.
+ * @param[in] shdrs Array of parsed and validated section haeders.
+ *  Must not be NULL.
  *
- * @param[out] @Nullable out_entries Output pointer.
+ * @param[out] out Output pointer.
  *  May be NULL, in which case it simply won't be written to
  *  and all allocated resources will be freed automatically.
  *

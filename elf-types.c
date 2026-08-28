@@ -3,6 +3,7 @@
 #include "util.h"
 #include "portable-endian.h"
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -581,13 +582,15 @@ int read_dyn(const struct blob *data, uint64_t *off_p,
 int write_dyn(struct blob *data, uint64_t *off_p,
               int clazz, int encoding, const Elf64_Dyn *dyn)
 {
-
+    pr_debug("%s: tag: %s: writing 0x%" PRIx64 "\n", __func__,
+            dynamic_tag_to_string(dyn->d_tag), dyn->d_un.d_val);
     if (clazz == ELFCLASS32) {
         if (dyn->d_tag > INT32_MAX || dyn->d_tag < INT32_MIN) {
             pr_error("%s: d_tag value outside of 32-bit integer limits\n",
                     __func__);
             return 1;
         }
+
         if (write_Sword(data, off_p, clazz, encoding, dyn->d_tag))
             return 1;
 

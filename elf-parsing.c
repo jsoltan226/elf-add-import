@@ -428,6 +428,7 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
 {
     out->arr = NULL;
     out->num = 0;
+    out->size = 0;
     out->dirty = false;
 
     Elf64_Xword phnum = 0;
@@ -561,6 +562,7 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
     } else {
         out->arr = arr; arr = NULL;
         out->num = phnum;
+        out->size = phsize;
         out->dirty = false;
     }
 
@@ -573,6 +575,7 @@ int read_validate_shdrs(const struct blob *data,
 {
     out->arr = NULL;
     out->num = 0;
+    out->size = 0;
     out->dirty = false;
     *out_shstrndx = 0;
 
@@ -641,6 +644,7 @@ int read_validate_shdrs(const struct blob *data,
     } else {
         out->arr = arr; arr = NULL;
         out->num = shnum;
+        out->size = shsize;
         out->dirty = false;
         *out_shstrndx = shstrndx;
     }
@@ -697,6 +701,16 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
         }
         memcpy(e.data.data, data->data, data->size);
     }
+
+    e.orig.ehdr = e.ehdr;
+    e.orig.phnum = e.phdrs.num;
+    e.orig.phsize = e.phdrs.size;
+    e.orig.shnum = e.shdrs.num;
+    e.orig.shsize = e.shdrs.size;
+    e.orig.shstrndx = e.shstrndx;
+    e.orig.dyn_strtab_off = e.dyn.strtab_off;
+    e.orig.dyn_strtab_sz = e.dyn.strtab_sz;
+    e.orig.dyn_strtab_vaddr = e.dyn.strtab_vaddr;
 
     if (out != NULL)
         memcpy(out, &e, sizeof(struct elf));
@@ -809,6 +823,9 @@ static int parse_phdr_tbl_data_from_ehdr(
     } else {
         phnum = ehdr->e_phnum;
     }
+    /* `ehdr->e_phentsize` is guaranteed to be either
+     * `sizeof(Elf32_Phdr)` or `sizeof(Elf64_Phdr)`
+     * by `read_validate_ehdr`. */
     if (phnum >= SIZE_MAX / ehdr->e_phentsize ||
         phnum >= UINT64_MAX / ehdr->e_phentsize)
     {
@@ -1082,6 +1099,9 @@ static int parse_shdr_tbl_data_from_ehdr(
         return 1;
     }
 
+    /* `ehdr->e_shentsize` is guaranteed to be either
+     * `sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)`
+     * by `read_validate_ehdr`. */
     if (shnum >= SIZE_MAX / ehdr->e_shentsize ||
         shnum >= UINT64_MAX / ehdr->e_shentsize)
     {

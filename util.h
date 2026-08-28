@@ -24,6 +24,9 @@ dummy_pr_debug__(const char *fmt, ...) { (void) fmt; }
 #define pr_debug printf
 #endif /* BUILDTYPE */
 
+#define u_min(a, b) ((a) < (b) ? (a) : (b))
+#define u_max(a, b) ((a) > (b) ? (a) : (b))
+
 /** @struct Generic container for an array of bytes */
 struct blob {
     /** The size of `data` */

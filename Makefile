@@ -4,6 +4,7 @@ AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
 COMMON_CFLAGS := -Wall -Wpedantic -Wextra -fPIC
+ASAN_FLAGS := -fsanitize=address,undefined
 CFLAGS ?=
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP
@@ -61,7 +62,8 @@ COL_RESET=[0m
 .PHONY: all release strip clean mostlyclean update run br tests build-tests run-tests
 .NOTPARALLEL: all release br $(TEST_LIB) $(TEST_LIB32) $(TEST_EXE) $(TEST_EXE32)
 
-all: CFLAGS += -ggdb -O0 -Wall
+all: CFLAGS += -ggdb -O0 -Wall $(ASAN_FLAGS)
+all: LDFLAGS += $(ASAN_FLAGS)
 all: $(OBJDIR) $(BINDIR) $(EXE)
 
 release: CFLAGS += -O3 -Wall -Werror -DBUILD_TYPE_RELEASE
@@ -74,18 +76,26 @@ $(EXE): $(OBJS)
 	@$(PRINTF) "CCLD 	%-30s %-30s\n" "$(EXE)" "<= $^"
 	@$(CCLD) $(LDFLAGS) -o $(EXE) $(OBJS) $(LIBS)
 
+$(TEST_LIB): CFLAGS += $(ASAN_FLAGS)
+$(TEST_LIB): LDFLAGS += $(ASAN_FLAGS)
 $(TEST_LIB): $(BINDIR) $(TEST_LIB_SRC) Makefile
 	@$(PRINTF) "CCLD	%-30s %-30s\n" "$(TEST_LIB)" "<= $(TEST_LIB_SRC)"
 	@$(CCLD) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(SO_LDFLAGS) -o $(TEST_LIB) $(TEST_LIB_SRC)
 
+$(TEST_LIB32): CFLAGS += $(ASAN_FLAGS)
+$(TEST_LIB32): LDFLAGS += $(ASAN_FLAGS)
 $(TEST_LIB32): $(BINDIR) $(TEST_LIB_SRC) Makefile
 	@$(PRINTF) "CCLD32	%-30s %-30s\n" "$(TEST_LIB32)" "<= $(TEST_LIB_SRC)"
 	@$(CCLD32) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(SO_LDFLAGS) -o $(TEST_LIB32) $(TEST_LIB_SRC)
 
+$(TEST_EXE): CFLAGS += $(ASAN_FLAGS)
+$(TEST_EXE): LDFLAGS += $(ASAN_FLAGS)
 $(TEST_EXE): $(BINDIR) $(TEST_LIB) $(TEST_LIB_COPY) $(TEST_EXE_SRC) Makefile
 	@$(PRINTF) "CCLD	%-30s %-30s\n" "$(TEST_EXE)" "<= $(TEST_EXE_SRC) $(TEST_LIB)"
 	@$(CCLD) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(TEST_LIB) -o $(TEST_EXE) $(TEST_EXE_SRC)
 
+$(TEST_EXE32): CFLAGS += $(ASAN_FLAGS)
+$(TEST_EXE32): LDFLAGS += $(ASAN_FLAGS)
 $(TEST_EXE32): $(BINDIR) $(TEST_LIB32) $(TEST_LIB32_COPY) $(TEST_EXE_SRC) Makefile
 	@$(PRINTF) "CCLD32	%-30s %-30s\n" "$(TEST_EXE32)" "<= $(TEST_EXE_SRC) $(TEST_LIB32)"
 	@$(CCLD32) $(COMMON_CFLAGS) $(CFLAGS) $(LDFLAGS) $(TEST_LIB32) -o $(TEST_EXE32) $(TEST_EXE_SRC)

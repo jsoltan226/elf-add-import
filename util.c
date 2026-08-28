@@ -10,7 +10,7 @@
 int read_file(const char *path, struct blob *out)
 {
     if (path == NULL || out == NULL) {
-        pr_error("%s: Invalid parameters\n", __func__);
+        pr_error("[%s] Invalid parameters\n", __func__);
         return -1;
     }
 
@@ -92,7 +92,7 @@ err:
 int write_file(const char *path, const struct blob *data)
 {
     if (path == NULL || data == NULL) {
-        pr_error("%s: Invalid parameters\n", __func__);
+        pr_error("[%s] Invalid parameters\n", __func__);
         return -1;
     }
 
@@ -139,11 +139,13 @@ err:
 
 void * safe_realloc(void **ptr_p, size_t new_n, size_t size)
 {
+    pr_debug("[%s] new_n: %zu, size: %zu\n", __func__, new_n, size);
+
     if (size == 0 || new_n == 0) {
-        pr_error("%s: Invalid new size (0)\n", __func__);
+        pr_error("[%s] Invalid new size (0)\n", __func__);
         goto err;
     } else if (new_n > SIZE_MAX / size) {
-        pr_error("%s: Size %zu*%zu too large (integer overflow)\n",
+        pr_error("[%s] Size %zu*%zu too large (integer overflow)\n",
                  __func__, new_n, size);
         goto err;
     }
@@ -153,7 +155,7 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size)
 
     void *tmp = realloc(ptr, newsize);
     if (tmp == NULL) {
-        pr_error("%s: Failed to realloc to size %zu\n", __func__, newsize);
+        pr_error("[%s] Failed to realloc to size %zu\n", __func__, newsize);
         goto err;
     }
 
@@ -175,7 +177,7 @@ const Elf64_Phdr * get_load_segment_containing_range(
 )
 {
     if (start > UINT64_MAX - size) {
-        pr_error("%s: Span too large (integer overflow)\n", __func__);
+        pr_error("[%s] Span too large (integer overflow)\n", __func__);
         return NULL;
     }
 

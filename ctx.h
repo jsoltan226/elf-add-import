@@ -16,13 +16,14 @@
  * Container for all data required to parse, patch and re-serialize
  * an ELF file (any class, any data encoding).
  *
- * Populated by `read_elf` and destroyed with `destroy_elf`.
+ * Populated by `parse_elf` and destroyed with `destroy_elf`.
  */
 struct elf {
     /**
      * @struct The ELF ident bytes, organized into a struct.
      * See the ELF spec.
-     * Always populated by `read_elf`, but never re-serialized.
+     * Always populated by `parse_elf`, but never re-serialized,
+     * and therefore treated as immutable.
      */
     struct elf_ident {
         uint8_t magic[SELFMAG]; /**< `EI_MAG[0-3]`; 0x7f 'E' 'L' 'F' */
@@ -37,9 +38,43 @@ struct elf {
     static_assert(sizeof(struct elf_ident) == EI_NIDENT, "Invalid size");
 
     /**
+     * @struct The original state of some ELF structures.
+     * Must not be modifed after `parse_elf`.
+     */
+    struct elf_orig_data {
+        Elf64_Ehdr ehdr; /**< The original ELF header. */
+
+        Elf64_Xword phnum; /**< Original program header count. */
+        Elf64_Xword phsize; /**< Original size of the phdr table. */
+
+        Elf64_Xword shnum; /**< Original section header count. */
+        Elf64_Xword shsize; /**< Original size of the shdr table. */
+
+        Elf64_Word shstrndx; /**< Original index of the
+                                  ".shstrtab" section header */
+
+        /**
+         * The original value of the DT_STRTAB entry;
+         * contains the virtual addres of the .dynamic string table.
+         */
+        Elf64_Addr dyn_strtab_vaddr;
+
+        /**
+         * The original offset of the .dynamic string table within the ELF data.
+         */
+        Elf64_Off dyn_strtab_off;
+
+        /**
+         * The original value of the DT_STRSZ entry;
+         * the size of the string table pointed to by DT_STRTAB.
+         */
+        Elf64_Xword dyn_strtab_sz;
+    } orig; /**< Original state of the ELF data structures */
+
+    /**
      * In-memory representation of the parsed ELF header.
      * Parsed by `read_validate_ehdr` and re-serialized by `write_ehdr`.
-     * Always populated by `read_elf`.
+     * Always populated by `parse_elf`.
      */
     Elf64_Ehdr ehdr;
     bool ehdr_dirty; /**< Dirty flag for `ehdr`. See `serialize_elf`. */
@@ -56,27 +91,52 @@ struct elf {
 
     /**
      * Array of parsed program headers (in-memory representation).
-     * Always populated by `read_elf`.
+     * Always populated by `parse_elf`.
      */
     struct elf_phdrs {
         /**
-         * The real number of entries in the array, including any `PN_XNUM`
-         * shenanigans.
-         */
+         * The real number of program headers,
+         * taking into account support for values >= `PN_XNUM`.
+        */
         Elf64_Xword num;
+        /**
+         * Equal to `num` * `ehdr.e_phentsize`.
+         *
+         * Meant to provide a way to delegate integer overflow validation
+         * exclusively to functions that mutate the `phdrs` struct,
+         * saving on complexity in code which just needs to read this value.
+         */
+        Elf64_Xword size;
+
         Elf64_Phdr *arr; /**< In-memory array of parsed program headers. */
+
         bool dirty; /**< Dirty flag (see `serialize_elf`). */
     } phdrs; /**< In-memory representation of the program headers. */
 
     /**
      * Array of parsed section headers (in-memory representation).
      * Since section headers are theoretically optional in `ET_DYN` ELFs,
-     * `read_elf` might write an empty array here.
+     * `parse_elf` might write an empty array here.
      */
     struct elf_shdrs {
+        /**
+         * The real number of section headers,
+         * taking into account support for values greater than `SHN_LORESERVE`.
+         */
         Elf64_Xword num;
+
+        /**
+         * Equal to `num` * `ehdr.e_shentsize`.
+         *
+         * Meant to provide a way to delegate integer overflow validation
+         * exclusively to functions that mutate the `shdrs` struct,
+         * saving on complexity in code which just needs to read this value.
+         */
+        Elf64_Xword size;
+
         Elf64_Shdr *arr; /**< In-memory array of parsed section headers. */
-        bool dirty;
+
+        bool dirty; /**< Dirty flag (see `serialize_elf`). */
     } shdrs; /**< In-memory representation of the section headers. */
 
     /**
@@ -84,7 +144,7 @@ struct elf {
      * @struct PT_DYNAMIC segment / SHT_DYNAMIC ".dynamic" section.
      *
      * Because we're working with `ET_DYN` files, this segment is mandatory
-     * and this struct will therefore always be populated by `read_elf`,
+     * and this struct will therefore always be populated by `parse_elf`,
      * even if there are no section headers.
      */
     struct elf_dynamic {

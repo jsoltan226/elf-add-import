@@ -6,15 +6,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <inttypes.h>
 
-int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
+int update_phnum(struct elf_phdrs *phdrs,
+                 Elf64_Xword new_phnum, Elf64_Half phentsize,
                  Elf64_Half *out_ehdr_e_phnum_p, struct elf_shdrs *shdrs)
 {
-    /* see `update_shnum`, does almost the same thing
-     * but is a more pleasant to read */
+    assert(phentsize == sizeof(Elf32_Phdr) || phentsize == sizeof(Elf64_Phdr));
 
-    if (new_size == 0) {
+    if (new_phnum == 0) {
         pr_error("%s: Resizing to 0 means the program headers "
                 "would have to be deleted entirely, "
                 "which is not supported here.\n",
@@ -22,36 +23,32 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
         goto err;
     }
 
+    if (new_phnum > UINT64_MAX / phentsize) {
+        pr_error("%s: New number of program headers too large "
+                "(integer overflow)\n", __func__);
+        goto err;
+    }
+
     /** Resize the phdrs array **/
-
-    if (phdrs->num > SIZE_MAX / sizeof(Elf64_Phdr)) {
-        pr_error("%s: Old size too large (integer overflow)\n",
-                __func__);
-        goto err;
-    }
-    if (new_size > SIZE_MAX / sizeof(Elf64_Phdr)) {
-        pr_error("%s: New size too large (integer overflow)\n",
-                __func__);
-        goto err;
-    }
-    const size_t prevsz = phdrs->num * sizeof(Elf64_Phdr);
-    const size_t newsz = new_size * sizeof(Elf64_Phdr);
-
     if ((phdrs->arr = safe_realloc((void **)&phdrs->arr,
-                                   new_size, sizeof(Elf64_Phdr))) == NULL)
+                                   new_phnum, sizeof(Elf64_Phdr))) == NULL)
     {
         pr_error("Failed to resize (realloc) the program headers array\n");
         goto err;
     }
     /* append zeroized entries if growing */
-    if (newsz > prevsz)
+    if (new_phnum > phdrs->num) {
+        /* neither can overflow */
+        const size_t newsz = new_phnum * sizeof(Elf64_Shdr);
+        const size_t prevsz = phdrs->num * sizeof(Elf64_Shdr);
         memset((uint8_t *)phdrs->arr + prevsz, 0, newsz - prevsz);
+    }
 
     /** Update the headers' fields */
 
-    if (new_size < PN_XNUM) {
+    if (new_phnum < PN_XNUM) {
         /* "normal" case */
-        *out_ehdr_e_phnum_p = (Elf64_Half)new_size;
+        *out_ehdr_e_phnum_p = (Elf64_Half)new_phnum;
     } else /* if (val >= PN_XNUM) */ {
         if (shdrs == NULL || shdrs->arr == NULL || shdrs->num < 1) {
             pr_error("%s: No section headers; can't resize past PN_XNUM\n",
@@ -65,11 +62,12 @@ int update_phnum(struct elf_phdrs *phdrs, Elf64_Xword new_size,
          * should be stored in the `sh_info` field of the first section header.
          */
         *out_ehdr_e_phnum_p = PN_XNUM;
-        shdrs->arr[0].sh_info = new_size;
+        shdrs->arr[0].sh_info = new_phnum;
         shdrs->dirty = true;
     }
 
-    phdrs->num = new_size;
+    phdrs->num = new_phnum;
+    phdrs->size = new_phnum * phentsize;
     phdrs->dirty = true;
     return 0;
 
@@ -79,14 +77,17 @@ err:
         phdrs->arr = NULL;
     }
     phdrs->num = 0;
+    phdrs->size = 0;
     phdrs->dirty = false;
     return 1;
 }
 
-int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
-                 Elf64_Half *out_ehdr_e_shnum_p)
+int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_shnum,
+                 Elf64_Half shentsize, Elf64_Half *out_ehdr_e_shnum_p)
 {
-    if (new_size == 0) {
+    assert(shentsize == sizeof(Elf32_Shdr) || shentsize == sizeof(Elf64_Shdr));
+
+    if (new_shnum == 0) {
         pr_error("%s: Resizing to 0 means the section headers "
                 "would have to be deleted entirely, "
                 "which is not supported here.\n",
@@ -94,29 +95,38 @@ int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
         goto err;
     }
 
+    if (new_shnum > UINT64_MAX / shentsize) {
+        pr_error("%s: New number of section headers too large "
+                "(integer overflow)\n", __func__);
+        goto err;
+    }
+
+
     /** Resize the `shdrs` array **/
     if ((shdrs->arr = safe_realloc((void **)&shdrs->arr,
-                                   new_size, sizeof(Elf64_Shdr))) == NULL)
+                                   new_shnum, sizeof(Elf64_Shdr))) == NULL)
     {
         pr_error("Failed to resize (realloc) the section headers array\n");
         goto err;
     }
     /* checked by `safe_realloc` */
-    const size_t newsz = new_size * sizeof(Elf64_Shdr);
 
     if (shdrs->num > SIZE_MAX / sizeof(Elf64_Shdr)) {
         pr_error("%s: Old size too large (integer overflow)\n", __func__);
         goto err;
     }
-    const size_t prevsz = shdrs->num * sizeof(Elf64_Shdr);
-     /* append zeroized entries if growing */
-    if (newsz > prevsz)
+    /* append zeroized entries if growing */
+    if (new_shnum > shdrs->num) {
+        /* neither can overflow */
+        const size_t newsz = new_shnum * sizeof(Elf64_Shdr);
+        const size_t prevsz = shdrs->num * sizeof(Elf64_Shdr);
         memset((uint8_t *)shdrs->arr + prevsz, 0, newsz - prevsz);
+    }
 
     /** Update the headers' fields **/
-    if (new_size < SHN_LORESERVE) {
+    if (new_shnum < SHN_LORESERVE) {
         /* "normal" case */
-        *out_ehdr_e_shnum_p = (Elf64_Half)new_size;
+        *out_ehdr_e_shnum_p = (Elf64_Half)new_shnum;
     } else /* if (new_size >= SHN_LORESERVE) */ {
         /**
          * The spec says that if the shnum is >= SHN_LORESERVE,
@@ -124,10 +134,11 @@ int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_size,
          * should be stored in the `sh_size` field of the first section header.
          */
         *out_ehdr_e_shnum_p = 0;
-        shdrs->arr[0].sh_size = new_size;
+        shdrs->arr[0].sh_size = new_shnum;
     }
 
-    shdrs->num = new_size;
+    shdrs->num = new_shnum;
+    shdrs->size = new_shnum * shentsize;
     shdrs->dirty = true;
     return 0;
 
@@ -137,6 +148,7 @@ err:
         shdrs->arr = NULL;
     }
     shdrs->num = 0;
+    shdrs->size = 0;
     shdrs->dirty = false;
     return 1;
 }
@@ -173,6 +185,73 @@ int update_shstrndx(Elf64_Word val, Elf64_Word *out,
         *out = val;
         return 0;
     }
+}
+
+static int find_unique_dynamic_entry(const struct elf_dynamic *dyn,
+                                     Elf64_Sxword tag, Elf64_Dyn **out)
+{
+    Elf64_Dyn *found = NULL;
+    for (Elf64_Xword i = 0; i < dyn->entries.num; i++) {
+        Elf64_Dyn *const curr = &dyn->entries.arr[i];
+        if (curr->d_tag != tag)
+            continue;
+
+        if (found != NULL) {
+            pr_error("Duplicate %s dynamic entry\n",
+                     dynamic_tag_to_string(tag));
+            return 1;
+        }
+
+        found = curr;
+    }
+    if (found == NULL) {
+        pr_error("No %s dynamic entry was found\n",
+                 dynamic_tag_to_string(tag));
+        return 1;
+    }
+
+    *out = found;
+    return 0;
+}
+
+int update_dynstr_range(Elf64_Addr new_addr, Elf64_Xword new_size,
+                        struct elf_dynamic *dyn,
+                        struct elf_shdrs *shdrs, const struct elf_phdrs *phdrs)
+{
+    const Elf64_Phdr *const pt_load =
+        get_load_segment_containing_range(phdrs->arr, phdrs->num,
+                                          new_addr, new_size);
+    if (pt_load == NULL) {
+        pr_error("The provided new dynstr is not within any PT_LOAD segment\n");
+        return 1;
+    }
+
+    Elf64_Dyn *dt_strtab = NULL, *dt_strsz = NULL;
+    if (find_unique_dynamic_entry(dyn, DT_STRTAB, &dt_strtab) ||
+        find_unique_dynamic_entry(dyn, DT_STRSZ, &dt_strsz))
+    {
+        pr_error("Couldn't find the DT_STRTAB and DT_STRSZ dynamic entries\n");
+        return 1;
+    }
+
+    dt_strtab->d_un.d_ptr = new_addr;
+    dt_strsz->d_un.d_val = new_size;
+    dyn->entries.dirty = true;
+
+    dyn->strtab_vaddr = new_addr;
+    dyn->strtab_sz = new_size;
+
+    const Elf64_Off new_off = pt_load->p_offset + (new_addr - pt_load->p_vaddr);
+    dyn->strtab_off = new_off;
+
+    if (dyn->strtab_shdr != NULL) {
+        dyn->strtab_shdr->sh_addr = new_addr;
+        dyn->strtab_shdr->sh_offset = new_off;
+        dyn->strtab_shdr->sh_size = new_size;
+        shdrs->dirty = true;
+    }
+
+    return 0;
 }
 
 int serialize_arr(struct blob *data, serializer_proc_t serializer,

@@ -374,14 +374,14 @@ static int calculate_new_phsize(const struct elf *elf, int n_new_segments,
 {
     if (elf->phdrs.num > UINT64_MAX - n_new_segments ||
         (elf->phdrs.num + n_new_segments) >
-            UINT64_MAX / elf->orig.ehdr.e_phentsize)
+            UINT64_MAX / elf->phentsize)
     {
         pr_error("New program header table size too large "
                 "(integer overflow)\n");
         return 1;
     }
 
-    *out = (elf->phdrs.num + n_new_segments) * elf->orig.ehdr.e_phentsize;
+    *out = (elf->phdrs.num + n_new_segments) * elf->phentsize;
     return 0;
 }
 
@@ -439,7 +439,7 @@ static int move_program_headers(
 )
 {
     pr_debug("new_phsize: %" PRIu64 " (num: %" PRIu64 ")\n",
-             new_phsize, new_phsize / elf->orig.ehdr.e_phentsize);
+             new_phsize, new_phsize / elf->phentsize);
 
     const Elf64_Off old_phoff = elf->orig.ehdr.e_phoff;
     const Elf64_Off new_phoff = new_seg->p_offset + new_phoff_in_seg;
@@ -504,7 +504,7 @@ static int construct_appended_ptload_phdr(const struct elf *elf,
         Elf64_Xword total_content_size, Elf64_Word flags, Elf64_Phdr *out)
 {
     if (elf->phdrs.num >= UINT64_MAX ||
-        elf->phdrs.num + 1 > UINT64_MAX / elf->orig.ehdr.e_phentsize ||
+        elf->phdrs.num + 1 > UINT64_MAX / elf->phentsize ||
         elf->phdrs.num + 1 > SIZE_MAX / sizeof(Elf64_Phdr))
     {
         pr_error("Too many program headers (integer overflow)\n");

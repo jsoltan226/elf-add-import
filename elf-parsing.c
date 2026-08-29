@@ -713,6 +713,8 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
     e.orig.dyn_strtab_off = e.dyn.strtab_off;
     e.orig.dyn_strtab_sz = e.dyn.strtab_sz;
     e.orig.dyn_strtab_vaddr = e.dyn.strtab_vaddr;
+    e.phentsize = e.ehdr.e_phentsize;
+    e.shentsize = e.ehdr.e_shentsize;
 
     if (out != NULL)
         memcpy(out, &e, sizeof(struct elf));

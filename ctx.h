@@ -19,6 +19,9 @@
  * Populated by `parse_elf` and destroyed with `destroy_elf`.
  */
 struct elf {
+
+    /** CONSTANT METADATA, POPULATED BY `parse_elf` AND NEVER MODIFIED LATER **/
+
     /**
      * @struct The ELF ident bytes, organized into a struct.
      * See the ELF spec.
@@ -70,6 +73,26 @@ struct elf {
          */
         Elf64_Xword dyn_strtab_sz;
     } orig; /**< Original state of the ELF data structures */
+
+    /**
+     * The value of `ehdr.e_phentsize` as well as `orig.ehdr.e_phentsize`
+     * (so either `sizeof(Elf64_Phdr)` or `sizeof(Elf32_Phdr)`).
+     * A little shortcut to not have to pick between `ehdr` and `orig.ehdr`,
+     * since this value will always be constant after `parse_elf`.
+     */
+    Elf64_Half phentsize;
+
+    /**
+     * The value of `ehdr.e_shentsize` as well as `orig.ehdr.e_shentsize`
+     * (so either `sizeof(Elf64_Shdr)` or `sizeof(Elf32_Shdr)`).
+     * A little shortcut to not have to pick between `ehdr` and `orig.ehdr`,
+     * since this value will always be constant.
+     */
+    Elf64_Half shentsize;
+
+    /** MUTABLE METADATA, INITIALLY POPULATED BY `parse_elf`,
+     ** MODIFIED IN `main.c` BY VARIOUS HELPERS FROM `elf-patching.h`,
+     ** AND LATER INTERPRETED & RE-SERIALIZED BY `serialize_elf`. **/
 
     /**
      * In-memory representation of the parsed ELF header.
@@ -183,7 +206,7 @@ struct elf {
         Elf64_Shdr *strtab_shdr;
     } dyn; /**< Everything related to the dynamic section */
 
-    /* The raw bytes of the ELF file */
+    /** The raw bytes of the ELF file **/
     struct blob data;
 };
 

@@ -16,7 +16,7 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
         return -1;
     }
 
-    if (new_phnum > UINT64_MAX / elf->orig.ehdr.e_phentsize) {
+    if (new_phnum > UINT64_MAX / elf->phentsize) {
         pr_error("%s: New number of program headers too large "
                 "(integer overflow)\n", __func__);
         goto err;
@@ -62,7 +62,7 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
     }
 
     elf->phdrs.num = new_phnum;
-    elf->phdrs.size = new_phnum * elf->orig.ehdr.e_phentsize;
+    elf->phdrs.size = new_phnum * elf->phentsize;
     elf->phdrs.dirty = true;
     return 0;
 
@@ -129,7 +129,7 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
         return -1;
     }
 
-    if (new_shnum > UINT64_MAX / elf->orig.ehdr.e_shentsize) {
+    if (new_shnum > UINT64_MAX / elf->shentsize) {
         pr_error("%s: New number of section headers too large "
                 "(integer overflow)\n", __func__);
         goto err;
@@ -173,7 +173,7 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
     }
 
     elf->shdrs.num = new_shnum;
-    elf->shdrs.size = new_shnum * elf->orig.ehdr.e_shentsize;
+    elf->shdrs.size = new_shnum * elf->shentsize;
     elf->shdrs.dirty = true;
     return 0;
 
@@ -405,7 +405,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     if (elf->phdrs.dirty) {
         if (serialize_arr(&elf->data,
                           (serializer_proc_t)write_phdr, elf->phdrs.arr,
-                          sizeof(Elf64_Phdr), elf->ehdr.e_phentsize,
+                          sizeof(Elf64_Phdr), elf->phentsize,
                           elf->ehdr.e_phoff, elf->phdrs.num, c, d))
         {
             pr_error("Failed to rewrite the program headers\n");
@@ -419,7 +419,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     if (elf->shdrs.dirty) {
         if (serialize_arr(&elf->data,
                           (serializer_proc_t)write_shdr, elf->shdrs.arr,
-                          sizeof(Elf64_Shdr), elf->ehdr.e_shentsize,
+                          sizeof(Elf64_Shdr), elf->shentsize,
                           elf->ehdr.e_shoff, elf->shdrs.num, c, d))
         {
             pr_error("Failed to rewrite the section headers\n");

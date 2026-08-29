@@ -102,8 +102,7 @@ int read_validate_dynamic_section(
 
     /** Ensure that the string table is within a PT_LOAD segment **/
     const Elf64_Phdr *strtab_load_seg =
-        get_load_segment_containing_range(phdrs->arr, phdrs->num,
-                                          strtab_addr, strtab_size);
+        find_containing_mem_ptload(phdrs, strtab_addr, strtab_size);
     if (strtab_load_seg == NULL) {
         pr_error("Dynamic string table not within any PT_LOAD segment\n");
         goto err;

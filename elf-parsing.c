@@ -538,20 +538,22 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
     /* Validate that any `PT_PHDR` and `PT_DYNAMIC` segments
      * are inside another `PT_LOAD` segment */
     if (!ret) {
+        struct elf_phdrs tmp = { .arr = arr, .num = phnum, .size = phsize };
         if (found_pt_phdr &&
-                get_load_segment_containing_range(arr, phnum,
-                    pt_phdr.p_vaddr, pt_phdr.p_memsz) == NULL)
+                find_containing_mem_ptload(&tmp,
+                        pt_phdr.p_vaddr, pt_phdr.p_memsz) == NULL)
         {
-            pr_error("PT_PHDR is not contained within any PT_LOAD segment\n");
+            pr_error("PT_PHDR is not contained in any PT_LOAD segment\n");
             ret = 1;
         }
         if (found_pt_dynamic &&
-                get_load_segment_containing_range(arr, phnum,
+                find_containing_mem_ptload(&tmp,
                     pt_dynamic.p_vaddr, pt_dynamic.p_memsz) == NULL)
         {
-            pr_error("PT_DYNAMIC is not contained within any PT_LOAD segment\n");
+            pr_error("PT_DYNAMIC is not contained in any PT_LOAD segment\n");
             ret = 1;
         }
+        tmp.arr = NULL;
     }
 
     if (ret) {

@@ -3,7 +3,7 @@
 
 /**
  * @file Functions for updating/patching more complex ELF structures
- *  and everything that depends on them etc.
+ *  and everything that depends on them.
  */
 
 #include "elf.h"
@@ -12,80 +12,107 @@
 /**
  * Resizes the program header array to the desired size
  * and updates the appropriate metadata.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * @param[in,out] phdrs The program headers array to resize.
+ * If growing, the new phdr entries are zeroed out.
+ * Resizing to 0 is not supported.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
  * @param[in] new_phnum Desired new count of program headers.
  *  Must be greater than zero, because otherwise the program headers
- *  would have to be removed altogether, which would require
- *  `e_phoff` be set to `0` which is out of the scope of this function.
- *
- * @param[in] phentsize The value of the `e_phentsize` field of the ELF header
- *  (`sizeof(Elf32_Phdr)` or `sizeof(Elf64_Phdr)`).
- *
- * @param[out] out_ehdr_e_phnum_p Output pointer for the new value
- *  of an `Elf64_Ehdr`'s `e_phnum` field (this might be different
- *   than the real array size, see the ELF spec).
- *
- * @param[in,out] shdrs Section headers array.
- *  Only relevant for `new_size` >= `PN_XNUM` (2^16 - 1 (0xffff)).
- *  In that case, the first section header's `sh_info` will contain the new size
- *  while the ELF header's `e_phnum` will be set to `PN_XNUM`.
- *  Otherwise it is ignored and can be NULL.
+ *  would have to be removed altogether which we don't support.
  *
  * @return 0 on success, non-zero on failure.
  */
-int update_phnum(struct elf_phdrs *phdrs,
-                 Elf64_Xword new_phnum, Elf64_Half phentsize,
-                 Elf64_Half *out_ehdr_e_phnum_p, struct elf_shdrs *shdrs);
+int update_phnum(struct elf *elf, Elf64_Xword new_phnum);
+
+/**
+ * Updates the program header table offset in the ELF header,
+ * as well as all other relevant metadata.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_off The desired new offset of the program header table.
+ *  Must reside within an existing PT_LOAD segment.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_phoff(struct elf *elf, Elf64_Off new_off);
 
 /**
  * Resizes the section header array to the desired size
  * and updates the appropriate metadata.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * @param[in,out] shdrs The section headers array to resize.
+ * If growing, the new shdr entries are zeroed out.
+ * Resizing to 0 is not supported.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
  * @param[in] new_shnum Desired new count of section headers.
  *  Must be greater than zero, because otherwise the section headers
- *  would have to be removed altogether, which would require
- *  `e_shoff` be set to `0` which is out of the scope of this function.
- *
- * @param[in] shentsize The value of the `e_shentsize` field of the ELF header
- *  (`sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)`).
- *
- * @param[out] out_ehdr_e_shnum_p Output pointer for the new value
- *  of an `Elf64_Ehdr`'s `e_shnum` field (this might be different
- *   than the real array size, see the ELF spec).
+ *  would have to be removed altogether which we don't support.
  *
  * @return 0 on success, non-zero on failure.
  */
-int update_shnum(struct elf_shdrs *shdrs, Elf64_Xword new_shnum,
-                 Elf64_Half shentsize, Elf64_Half *out_ehdr_e_shnum_p);
+int update_shnum(struct elf *elf, Elf64_Xword new_shnum);
+
+/**
+ * Updates the section header table offset in the ELF header,
+ * as well as all other relevant metadata.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_off The desired new offset of the section header table.
+ *  Must reside within an existing PT_LOAD segment.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_shoff(struct elf *elf, Elf64_Off new_off);
 
 /**
  * Updates the section header string table index
  * as well as any additional metadata, if required.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * @param[in] val The desired value of the index of the shdr strtab section.
- *  Note: the value `0` means that there's no shdr strtab section.
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
- * @param[out] out Output pointer. Will contain `val` on success.
- *
- * @param[in,out] shdrs Section headers array.
- *  Only relevant for `val` >= `SHN_LORESERVE` (2^16 - 256 (0xff00)).
- *  In that case, the first section header's `sh_link` will contain the new size
- *  while the ELF header's `e_shstrndx` will be set to `SHN_XINDEX`.
- *  Otherwise ignored and can be set to `NULL`.
+ * @param[in] new_shstrndx The desired value of
+ *  the index of the shdr strtab section.
+ *  Note: the value `0` means that there is no shdr strtab section.
  *
  * @return 0 on success, non-zero on failure.
  *  Note: For `val` < `SHN_LORESERVE`, this function always succeeds.
  */
-int update_shstrndx(Elf64_Word val, Elf64_Word *out,
-                    Elf64_Half *out_ehdr_shstrndx_p, struct elf_shdrs *shdrs);
+int update_shstrndx(struct elf *elf, Elf64_Word new_shstrndx);
 
-int update_dynstr_range(Elf64_Addr new_addr, Elf64_Xword new_size,
-                        struct elf_dynamic *dyn,
-                        struct elf_shdrs *shdrs, const struct elf_phdrs *phdrs);
+/**
+ * Updates the DT_STRTAB and DT_STRSZ entries which hold the values
+ * for the .dynstr dynamic string table virtual address and size, respectively.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * This function also handles the automatic updating of the ".dynstr" section
+ * in the section headers, if one is found.
+ * All other relevant metadata in `elf` is also handled.
+ *
+ * Note: The provided range must be contained in a PT_LOAD segment
+ *  already present in `elf`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_addr The new value of DT_STRTAB
+ *  (virtual address of the .dynstr dynamic string table).
+ *
+ * @param[in] new_size The new value of DT_STRSZ
+ *  (size of the .dynstr dynamic string table).
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_dynstr_range(struct elf *elf,
+                        Elf64_Addr new_addr, Elf64_Xword new_size);
 
 /**
  * @func

@@ -171,24 +171,56 @@ err:
     return NULL;
 }
 
-const Elf64_Phdr * get_load_segment_containing_range(
-        const Elf64_Phdr *phdrs, Elf64_Xword nphdrs,
-        Elf64_Xword start, Elf64_Xword size
-)
+const Elf64_Phdr *
+find_containing_mem_ptload(const struct elf_phdrs *phdrs,
+                           Elf64_Addr start, Elf64_Xword size)
 {
+    if (phdrs == NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return NULL;
+    }
     if (start > UINT64_MAX - size) {
         pr_error("[%s] Span too large (integer overflow)\n", __func__);
         return NULL;
     }
 
-    for (Elf64_Xword i = 0; i < nphdrs; i++) {
-        const Elf64_Phdr *const curr = &phdrs[i];
+    for (Elf64_Xword i = 0; i < phdrs->num; i++) {
+        const Elf64_Phdr *const curr = &phdrs->arr[i];
 
         /* anything `curr` is assumed to be bounds-checked and validated
          * earlier by `read_validate_phdrs` */
         if (curr->p_type == PT_LOAD &&
             start >= curr->p_vaddr &&
             start + size <= curr->p_vaddr + curr->p_memsz)
+        {
+            return curr;
+        }
+    }
+
+    return NULL;
+}
+
+const Elf64_Phdr *
+find_containing_file_ptload(const struct elf_phdrs *phdrs,
+                            Elf64_Off off, Elf64_Xword size)
+{
+    if (phdrs == NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return NULL;
+    }
+    if (off > UINT64_MAX - size) {
+        pr_error("[%s] Span too large (integer overflow)\n", __func__);
+        return NULL;
+    }
+
+    for (Elf64_Xword i = 0; i < phdrs->num; i++) {
+        const Elf64_Phdr *const curr = &phdrs->arr[i];
+
+        /* anything `curr` is assumed to be bounds-checked and validated
+         * earlier by `read_validate_phdrs` */
+        if (curr->p_type == PT_LOAD &&
+            off >= curr->p_offset &&
+            off + size <= curr->p_offset + curr->p_filesz)
         {
             return curr;
         }

@@ -13,6 +13,7 @@
 #include <inttypes.h>
 
 struct elf;
+struct elf_phdrs;
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
 
@@ -63,6 +64,32 @@ int read_file(const char *path, struct blob *out);
  * @return 0 on success, non-zero on failure.
  */
 int write_file(const char *path, const struct blob *data);
+
+/**
+ * Increments `*off_p` by `size`, storing the previous value in `out`.
+ *
+ * @param[in,out] off_p A pointer to the current offset to increment.
+ *  Must not be NULL.
+ *
+ * @param[in] size The size to reserve.
+ *
+ * @param[out] out Output pointer for the start of the reserved range.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero in case of integer overflow.
+ */
+static inline int reserve_range(Elf64_Off *off_p,
+                                Elf64_Xword size, Elf64_Off *out)
+{
+    if (*off_p > UINT64_MAX || size > UINT64_MAX - *off_p) {
+        pr_error("Can't reserve new range (integer overflow)\n");
+        return 1;
+    }
+
+    *out = *off_p;
+    *off_p += size;
+    return 0;
+}
 
 /** Check whether a number is a power of two */
 static inline bool is_pow2(uint64_t x) {
@@ -144,11 +171,9 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  * that contains a given virtual address range.
  *
  * @param[in] phdrs The parsed in-memory array of program headers to search.
- *  Must not be NULL if `nphdrs > 0`.
+ *  Must not be NULL.
  *
- * @param[in] nphdrs The number of entries in the `phdrs` array.
- *
- * @param[in] start The start of the range to check.
+ * @param[in] start The start address of the range to check.
  *
  * @param[in] size The size (length) of the range to check.
  *
@@ -156,10 +181,46 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  *  the corresponding program header (a reference into `phdrs`).
  *  If nothing valid is found, `NULL` is returned.
  */
-const Elf64_Phdr * get_load_segment_containing_range(
-        const Elf64_Phdr *phdrs, Elf64_Xword nphdrs,
-        Elf64_Xword start, Elf64_Xword size
-);
+const Elf64_Phdr *
+find_containing_mem_ptload(const struct elf_phdrs *phdrs,
+                           Elf64_Addr start, Elf64_Xword size);
+
+/**
+ * Attempts to find a PT_LOAD segment that contains a given file range.
+ *
+ * @param[in] phdrs The parsed in-memory array of program headers to search.
+ *  Must not be NULL.
+ *
+ * @param[in] off The start offset of the file range to check.
+ *
+ * @param[in] size The size (length) of the range to check.
+ *
+ * @return If a segment containing the full range is found,
+ *  the corresponding program header (a reference into `phdrs`).
+ *  If nothing valid is found, `NULL` is returned.
+ */
+const Elf64_Phdr *
+find_containing_file_ptload(const struct elf_phdrs *phdrs,
+                            Elf64_Off off, Elf64_Xword size);
+
+/**
+ * Attempts to find a PT_LOAD segment
+ * that contains a given virtual address range.
+ *
+ * @param[in] phdrs The parsed in-memory array of program headers to search.
+ *  Must not be NULL.
+ *
+ * @param[in] start The start address of the range to check.
+ *
+ * @param[in] size The size (length) of the range to check.
+ *
+ * @return If a segment containing the full range is found,
+ *  the corresponding program header (a reference into `phdrs`).
+ *  If nothing valid is found, `NULL` is returned.
+ */
+const Elf64_Phdr *
+find_containing_memory_ptload(const struct elf_phdrs *phdrs,
+                              Elf64_Addr start, Elf64_Xword size);
 
 /**
  * Finds the section name by the `sh_name` field of a section header.

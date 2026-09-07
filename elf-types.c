@@ -340,6 +340,7 @@ int read_phdr(const struct blob *data, uint64_t *off_p,
         out->p_align = tmp_align | UINT64_C(0);
     }
 
+#if 0
     pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
     pr_debug("%s: out->p_type: 0x%" PRIx32 " (%" PRIu32 ")\n", __func__,
              out->p_type, out->p_type);
@@ -357,12 +358,14 @@ int read_phdr(const struct blob *data, uint64_t *off_p,
              out->p_memsz, out->p_memsz);
     pr_debug("%s: out->p_align: 0x%" PRIx64 " (%" PRIu64 ")\n", __func__,
              out->p_align, out->p_align);
+#endif /* 0 */
     return 0;
 }
 
 int write_phdr(struct blob *data, uint64_t *off_p,
                int clazz, int encoding, const Elf64_Phdr *phdr)
 {
+#if 0
     pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
     pr_debug("%s: phdr->p_type: 0x%" PRIx32 " (%" PRIu32 ")\n", __func__,
              phdr->p_type, phdr->p_type);
@@ -380,6 +383,7 @@ int write_phdr(struct blob *data, uint64_t *off_p,
              phdr->p_memsz, phdr->p_memsz);
     pr_debug("%s: phdr->p_align: 0x%" PRIx64 " (%" PRIu64 ")\n", __func__,
              phdr->p_align, phdr->p_align);
+#endif /* 0 */
 
     if (write_Word(data, off_p, clazz, encoding, phdr->p_type))
         return 1;

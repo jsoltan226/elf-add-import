@@ -32,6 +32,10 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum);
  * as well as all other relevant metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
+ * Note: If also resizing the table, be sure to call `update_phnum` **BEFORE**
+ *  `update_phoff` as the bounds checks in this function rely on the
+ *  current size of `elf->phdrs`.
+ *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
  * @param[in] new_off The desired new offset of the program header table.
@@ -63,6 +67,10 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum);
  * Updates the section header table offset in the ELF header,
  * as well as all other relevant metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * Note: If also resizing the table, be sure to call `update_shnum` **BEFORE**
+ *  `update_shoff` as the bounds checks in this function rely on the
+ *  current size of `elf->shdrs`.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -113,6 +121,37 @@ int update_shstrndx(struct elf *elf, Elf64_Word new_shstrndx);
  */
 int update_dynstr_range(struct elf *elf,
                         Elf64_Addr new_addr, Elf64_Xword new_size);
+
+/**
+ * Updates the number of dynamic entries (resizes the array).
+ * If growing, the new entries are zeroed out, making their type `DT_NULL`.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * Note: If also moving the table, be sure to call `update_dyn_tbl_off`
+ *  **BEFORE** `update_dyn_tbl_num` as the bounds checks in this function
+ *  rely on the current offset & vaddr of the _DYNAMIC table.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_dynnum The desired new number of DT_* dynamic entries.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum);
+
+/**
+ * Updates the offset (location) of the dynamic entries array.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_off The desired new file offset of the DYNAMIC table.
+ *  The offset must account for the fact that the dynamic table
+ *  must wholly reside within an existing PT_LOAD segment.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off);
 
 /**
  * @func

@@ -33,6 +33,10 @@
  *  May be NULL, in which case it simply won't be written to
  *  and all allocated resources will be freed automatically.
  *
+ * @param[out] out_dynentsize Output pointer for the size of a dynamic entry
+ *  (`sizeof(Elf32_Dyn)` for 32-bit or `sizeof(Elf64_Dyn)` for 64-bit).
+ *  May be NULL, in which case it simply won't be written to.
+ *
  * @return 0 on success (valid PT_DYNAMIC phdr),
  *  non-zero on failure (invalid or non-existent PT_DYNAMIC phdr,
  *                       present but invalid SHT_DYNAMIC shdr).
@@ -41,7 +45,7 @@ int read_validate_dynamic_section(
         const struct blob *data, int clazz, int encoding,
         struct elf_phdrs *phdrs, struct elf_shdrs *shdrs,
 
-        struct elf_dynamic *out
+        struct elf_dynamic *out, Elf64_Half *out_dynentsize
 );
 
 /**
@@ -112,14 +116,14 @@ int parse_dyn_array(const struct blob *data, int clazz, int encoding,
  *
  * @param[in] size Size of the dynamic string table (the value of DT_STRSZ).
  *
- * @param[out] out Output pointer for the found valid .dynstr section header.
- *  On success it will either contain a reference into `shdrs`
- *  or NULL (if there's no .dynstr section).
+ * @param[out] out Output pointer for the found valid .dynstr section header's
+ *  index. On success it will either contain a reference into `shdrs`
+ *  or `ELF_IDX_NULL` (if there's no .dynstr section).
  *
  * @return 0 on success, non-zero on failure.
  */
 int find_validate_strtab_shdr(Elf64_Shdr *shdrs, Elf64_Xword shnum,
                               Elf64_Addr addr, Elf64_Off off,
-                              Elf64_Xword size, Elf64_Shdr **out);
+                              Elf64_Xword size, elf_idx_t *out);
 
 #endif /* ELF_DYN_PARSING_H_ */

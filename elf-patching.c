@@ -34,9 +34,8 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
     /* zero out the new entries if growing */
     if (new_phnum > old_phnum) {
         /* neither can overflow */
-        const size_t newsz = new_phnum * sizeof(Elf64_Shdr);
-        const size_t prevsz = old_phnum * sizeof(Elf64_Shdr);
-        memset((uint8_t *)elf->phdrs.arr + prevsz, 0, newsz - prevsz);
+        memset(&elf->phdrs.arr[old_phnum], 0,
+                (new_phnum - old_phnum) * sizeof(Elf64_Phdr));
     }
 
     /** Update the headers' fields */
@@ -152,10 +151,8 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
     }
     /* append zeroized entries if growing */
     if (new_shnum > old_shnum) {
-        /* neither can overflow */
-        const size_t newsz = new_shnum * sizeof(Elf64_Shdr);
-        const size_t prevsz = old_shnum * sizeof(Elf64_Shdr);
-        memset((uint8_t *)elf->shdrs.arr + prevsz, 0, newsz - prevsz);
+        memset(&elf->shdrs.arr[old_shnum], 0,
+                (new_shnum - old_shnum) * sizeof(Elf64_Shdr));
     }
 
     /** Update the headers' fields **/
@@ -325,13 +322,110 @@ int update_dynstr_range(struct elf *elf,
     const Elf64_Off new_off = pt_load->p_offset + (new_addr - pt_load->p_vaddr);
     elf->dyn.strtab_off = new_off;
 
-    if (elf->dyn.strtab_shdr != NULL) {
-        elf->dyn.strtab_shdr->sh_addr = new_addr;
-        elf->dyn.strtab_shdr->sh_offset = new_off;
-        elf->dyn.strtab_shdr->sh_size = new_size;
+    if (elf->dyn.strtab_shdr != ELF_IDX_NULL) {
+        Elf64_Shdr *const strtab_shdr = get_shdr_rw(elf, elf->dyn.strtab_shdr);
+        strtab_shdr->sh_addr = new_addr;
+        strtab_shdr->sh_offset = new_off;
+        strtab_shdr->sh_size = new_size;
         elf->shdrs.dirty = true;
     }
 
+    return 0;
+}
+
+int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum)
+{
+    if (elf == NULL || elf->dyn.phdr == ELF_IDX_NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
+    Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
+
+    if (new_dynnum > UINT64_MAX / elf->dynentsize ||
+        new_dynnum > SIZE_MAX / elf->dynentsize)
+    {
+        pr_error("New number of dynamic entries too large "
+                "(integer overflow)\n");
+        return -1;
+    }
+
+    const Elf64_Xword new_dyn_tbl_size = new_dynnum * elf->dynentsize;
+    if (find_containing_file_ptload(&elf->phdrs,
+                pt_dynamic->p_offset, new_dyn_tbl_size) == NULL ||
+        find_containing_mem_ptload(&elf->phdrs,
+                pt_dynamic->p_vaddr, new_dyn_tbl_size) == NULL)
+    {
+        pr_error("New DYNAMIC table is not contained in any PT_LOAD segment\n");
+        return -1;
+    }
+
+    const Elf64_Xword old_dynnum = elf->dyn.entries.num;
+
+    elf->dyn.entries.arr = safe_realloc((void **)&elf->dyn.entries.arr,
+                                        new_dynnum, sizeof(Elf64_Dyn));
+    if (elf->dyn.entries.arr == NULL) {
+        pr_error("Failed to resize (realloc) the dynamic entries array\n");
+        elf->dyn.entries.num = 0;
+        return 1;
+    }
+    elf->dyn.entries.num = new_dynnum;
+    elf->dyn.entries.size = new_dyn_tbl_size;
+
+    if (new_dynnum > old_dynnum) {
+        memset(&elf->dyn.entries.arr[old_dynnum], 0,
+                (new_dynnum - old_dynnum) * sizeof(Elf64_Dyn));
+    }
+
+    pt_dynamic->p_filesz = new_dyn_tbl_size;
+    pt_dynamic->p_memsz = new_dyn_tbl_size;
+    elf->phdrs.dirty = true;
+
+    if (elf->dyn.shdr != ELF_IDX_NULL) {
+        get_shdr_rw(elf, elf->dyn.shdr)->sh_size = new_dyn_tbl_size;
+        elf->shdrs.dirty = true;
+    }
+
+    pr_debug("[%s] New DYNAMIC table size: %" PRIu64 " (%" PRIu64 " entries)\n",
+             __func__, new_dyn_tbl_size, new_dynnum);
+    return 0;
+}
+
+int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off)
+{
+    if (elf == NULL || elf->dyn.phdr == ELF_IDX_NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
+    Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
+
+    const Elf64_Phdr *ptload = find_containing_file_ptload(&elf->phdrs,
+            new_off, elf->dyn.entries.size);
+    if (ptload == NULL) {
+        pr_error("The given offset would make the dynamic table "
+                 "not be contained within a PT_LOAD segment\n");
+        return -1;
+    }
+
+    const Elf64_Off off_in_seg = new_off - ptload->p_offset;
+    const Elf64_Addr new_vaddr = ptload->p_vaddr + off_in_seg;
+
+    pt_dynamic->p_offset = new_off;
+    pt_dynamic->p_vaddr = new_vaddr;
+    pt_dynamic->p_paddr = new_vaddr;
+    elf->phdrs.dirty = true;
+
+    if (elf->dyn.shdr != ELF_IDX_NULL) {
+        Elf64_Shdr *const sht_dynamic = get_shdr_rw(elf, elf->dyn.shdr);
+        sht_dynamic->sh_offset = new_off;
+        sht_dynamic->sh_addr = new_vaddr;
+        elf->shdrs.dirty = true;
+    }
+
+    pr_debug("[%s] New DYNAMIC table offset: 0x%" PRIx64 " "
+             "(vaddr: 0x%" PRIx64 ")\n",
+             __func__, new_off, new_vaddr);
     return 0;
 }
 
@@ -364,6 +458,8 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
     if (filesize > data->size ||
         start > data->size - filesize)
     {
+        pr_error("filesize: %lu, start: %lu, data->size: %lu\n",
+                filesize, start, data->size);
         pr_error("Not enough space in data buffer\n");
         return 1;
     }
@@ -431,12 +527,13 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
 
     pr_debug("Dynamic entries dirty: %d\n", !!elf->dyn.entries.dirty);
     if (elf->dyn.entries.dirty) {
+        const Elf64_Phdr *const pt_dynamic = get_phdr_ro(elf, elf->dyn.phdr);
         const Elf64_Xword fileentsize =
             c == ELFCLASS32 ? sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
         if (serialize_arr(&elf->data,
                           (serializer_proc_t)write_dyn, elf->dyn.entries.arr,
                           sizeof(Elf64_Dyn), fileentsize,
-                          elf->dyn.phdr->p_offset, elf->dyn.entries.num, c, d))
+                          pt_dynamic->p_offset, elf->dyn.entries.num, c, d))
         {
             pr_error("Failed to serialize the dynamic entries\n");
             return 1;

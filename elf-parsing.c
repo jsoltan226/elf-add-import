@@ -686,14 +686,16 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
         goto err;
     }
 
-    if (read_validate_dynamic_section(data, c, d, &e.phdrs, &e.shdrs, &e.dyn)) {
+    if (read_validate_dynamic_section(data, c, d, &e.phdrs, &e.shdrs,
+                                      &e.dyn, &e.dynentsize))
+    {
         pr_error("Invalid or missing dynamic segment\n");
         goto err;
     }
 
     if (move) {
         e.data = *data;
-        *data = (struct blob) { .data = NULL, .size =0 };
+        *data = (struct blob) { .data = NULL, .size = 0 };
     } else {
         e.data.size = data->size;
         e.data.data = malloc(data->size);

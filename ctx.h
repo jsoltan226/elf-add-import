@@ -10,6 +10,15 @@
 #include <assert.h>
 
 /**
+ * @type Used to refer to entries in arrays of in-memory ELF structures,
+ * such as the program and section headers and the dynamic entries.
+ */
+typedef Elf64_Xword elf_idx_t;
+
+/** Sentinel value for `elf_idx_t` which indicates that an index is invalid. */
+#define ELF_IDX_NULL ((Elf64_Xword)-1)
+
+/**
  * @brief ELF file parsing & patching context.
  *
  * @struct elf
@@ -90,6 +99,12 @@ struct elf {
      */
     Elf64_Half shentsize;
 
+    /**
+     * The size of a DT_* dynamic entry, depending on the ELF's class
+     * (either `sizeof(Elf32_Dyn)` for 32-bit or `sizeof(Elf64_Dyn) for 64-bit).
+     */
+    Elf64_Half dynentsize;
+
     /** MUTABLE METADATA, INITIALLY POPULATED BY `parse_elf`,
      ** MODIFIED IN `main.c` BY VARIOUS HELPERS FROM `elf-patching.h`,
      ** AND LATER INTERPRETED & RE-SERIALIZED BY `serialize_elf`. **/
@@ -120,6 +135,7 @@ struct elf {
         /**
          * The real number of program headers,
          * taking into account support for values >= `PN_XNUM`.
+         * Note: DO NOT MODIFY DIRECTLY; use `update_phnum` instead.
         */
         Elf64_Xword num;
         /**
@@ -131,7 +147,11 @@ struct elf {
          */
         Elf64_Xword size;
 
-        Elf64_Phdr *arr; /**< In-memory array of parsed program headers. */
+        /**
+         * In-memory array of parsed program headers.
+         * Note: DO NOT ACCESS DIRECTLY. See `get_phdr_rw`/`get_phdr_ro`.
+         */
+        Elf64_Phdr *arr;
 
         bool dirty; /**< Dirty flag (see `serialize_elf`). */
     } phdrs; /**< In-memory representation of the program headers. */
@@ -145,6 +165,7 @@ struct elf {
         /**
          * The real number of section headers,
          * taking into account support for values greater than `SHN_LORESERVE`.
+         * Note: DO NOT MODIFY DIRECTLY; use `update_shnum` instead.
          */
         Elf64_Xword num;
 
@@ -157,7 +178,11 @@ struct elf {
          */
         Elf64_Xword size;
 
-        Elf64_Shdr *arr; /**< In-memory array of parsed section headers. */
+        /**
+         * In-memory array of parsed section headers.
+         * Note: DO NOT ACCESS DIRECTLY. See `get_shdr_rw`/`get_shdr_ro`.
+         */
+        Elf64_Shdr *arr;
 
         bool dirty; /**< Dirty flag (see `serialize_elf`). */
     } shdrs; /**< In-memory representation of the section headers. */
@@ -173,22 +198,38 @@ struct elf {
     struct elf_dynamic {
         /**
          * Array of parsed DT_* dynamic entries (in-memory representation).
-         * Always populated
-         * */
+         * Always populated by `parse_elf`.
+         */
         struct elf_dyn_entries {
+            /** The real number of entries in the _DYNAMIC array */
             Elf64_Xword num;
+
+            /**
+             * Equal to `num` * `dynentsize`.
+             *
+             * Meant to provide a way to delegate integer overflow validation
+             * exclusively to functions that mutate the dynamic entries struct,
+             * saving on complexity in code which just needs to read this value.
+             */
+            Elf64_Xword size;
+
+            /**
+             * In-memory array of parsed dynamic entries.
+             * Note: DO NOT ACCESS DIRECTLY. See `get_dyn_rw`/`get_dyn_ro`.
+             */
             Elf64_Dyn *arr;
-            bool dirty;
-        } entries;
 
-        /* Pointer to the PT_DYNAMIC program header (reference into `phdrs`).
+            bool dirty; /**< Dirty flag (see `serialize_elf`). */
+        } entries; /**< In-memory representation of the _DYNAMIC array. */
+
+        /* Index of the PT_DYNAMIC program header (reference into `phdrs`).
          * On success, `read_validate_dynamic_section`
-         * will always write a non-NULL value here. */
-        Elf64_Phdr *phdr;
+         * will always write a valid value here. */
+        elf_idx_t phdr;
 
-        /* Pointer to the SHT_DYNAMIC section header (reference into `shdrs`).
-         * `read_validate_dynamic_section` might write NULL here. */
-        Elf64_Shdr *shdr;
+        /* Index of the SHT_DYNAMIC section header (reference into `shdrs`).
+         * `read_validate_dynamic_section` might write `ELF_IDX_NULL` here. */
+        elf_idx_t shdr;
 
         /* The value of the DT_STRTAB entry;
          * contains the virtual addres of the .dynamic string table. */
@@ -201,14 +242,134 @@ struct elf {
          * the size of the string table pointed to by `strtab`. */
         Elf64_Xword strtab_sz;
 
-        /* Pointer to the .dynstr section header (reference into `shdrs`).
+        /* Index of the .dynstr section header (reference into `shdrs`).
          * Might be NULL if there's no .dynstr section. */
-        Elf64_Shdr *strtab_shdr;
+        elf_idx_t strtab_shdr;
     } dyn; /**< Everything related to the dynamic section */
 
     /** The raw bytes of the ELF file **/
     struct blob data;
 };
+
+/**
+ * Getter for a read-write reference to an entry in `elf->phdrs`.
+ *
+ * Use this instead of direct access to `elf->phdrs.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->phdrs.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->phdrs.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+Elf64_Phdr * get_phdr_rw(struct elf *elf, elf_idx_t idx);
+
+/**
+ * Getter for a read-only reference to an entry in `elf->phdrs`.
+ *
+ * Use this instead of direct access to `elf->phdrs.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->phdrs.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->phdrs.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+const Elf64_Phdr * get_phdr_ro(const struct elf *elf, elf_idx_t idx);
+
+/**
+ * Getter for a read-write reference to an entry in `elf->shdrs`.
+ *
+ * Use this instead of direct access to `elf->shdrs.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->shdrs.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->shdrs.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+Elf64_Shdr * get_shdr_rw(struct elf *elf, elf_idx_t idx);
+
+/**
+ * Getter for a read-only reference to an entry in `elf->shdrs`.
+ *
+ * Use this instead of direct access to `elf->shdrs.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->shdrs.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->shdrs.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+const Elf64_Shdr * get_shdr_ro(const struct elf *elf, elf_idx_t idx);
+
+/**
+ * Getter for a read-write reference to an entry in `elf->dyn.entries`.
+ *
+ * Use this instead of direct access to `elf->dyn.entries.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->dyn.entries.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->dyn.entries.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+Elf64_Dyn * get_dyn_rw(struct elf *elf, elf_idx_t idx);
+
+/**
+ * Getter for a read-only reference to an entry in `elf->dyn.entries`.
+ *
+ * Use this instead of direct access to `elf->dyn.entries.arr` to avoid the risk
+ * of a use-after-free potentially introduced by a future `realloc`.
+ *
+ * Note: The returned pointer should be used and discarded as soon as possible.
+ * To refer to a given entry, store its index and use this API to retrieve it
+ * whenever necessary.
+ *
+ * @param elf The ELF context. Must not be NULL.
+ *
+ * @param idx The index of the entry to retrieve.
+ *  Must be smaller than `elf->dyn.entries.num` and not equal `ELF_IDX_NULL`.
+ *
+ * @return Ephemeral pointer to an entry in `elf->dyn.entries.arr`
+ *  or `NULL` if the index or ELF context are invalid.
+ */
+const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx);
 
 /**
  * Destroys an ELF context, freeing any associated resources.

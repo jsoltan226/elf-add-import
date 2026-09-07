@@ -10,7 +10,7 @@ int read_validate_dynamic_section(
         const struct blob *data, int clazz, int encoding,
         struct elf_phdrs *phdrs, struct elf_shdrs *shdrs,
 
-        struct elf_dynamic *out
+        struct elf_dynamic *out, Elf64_Half *out_dynentsize
 )
 {
     if (data == NULL || phdrs == NULL || shdrs == NULL) {
@@ -20,44 +20,49 @@ int read_validate_dynamic_section(
 
     if (out != NULL)
         memset(out, 0, sizeof(struct elf_dynamic));
+    if (out_dynentsize != NULL)
+        *out_dynentsize = 0;
 
-    const size_t entsize = clazz == ELFCLASS32 ?
+    const Elf64_Half entsize = clazz == ELFCLASS32 ?
         sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
 
     /** Find and validate the PT_DYNAMIC program header **/
-    Elf64_Phdr *pt_dynamic = NULL;
+    elf_idx_t pt_dynamic_idx = ELF_IDX_NULL;
     {
         for (Elf64_Xword i = 0; i < phdrs->num; i++) {
             if (phdrs->arr[i].p_type == PT_DYNAMIC) {
-                pt_dynamic = &phdrs->arr[i];
+                pt_dynamic_idx = i;
                 break;
             }
         }
-        if (pt_dynamic == NULL) {
+        if (pt_dynamic_idx == ELF_IDX_NULL) {
             pr_error("No PT_DYNAMIC header; "
                      "the ELF is probably not dynamically linked\n");
             return 1;
-        } else if (validate_pt_dynamic(pt_dynamic, entsize)) {
+        } else if (validate_pt_dynamic(&phdrs->arr[pt_dynamic_idx], entsize)) {
             pr_error("Invalid PT_DYNAMIC segment header\n");
             return 1;
         }
     }
+    const Elf64_Phdr *const pt_dynamic = &phdrs->arr[pt_dynamic_idx];
     const Elf64_Xword dynnum = pt_dynamic->p_filesz / entsize;
 
     /** If present, validate the .dynamic section header against PT_DYNAMIC **/
-    Elf64_Shdr *sht_dynamic = NULL;
+    elf_idx_t sht_dynamic_idx = ELF_IDX_NULL;
     {
         for (Elf64_Xword i = 0; i < shdrs->num; i++) {
             if (shdrs->arr[i].sh_type == SHT_DYNAMIC) {
-                if (sht_dynamic != NULL) {
+                if (sht_dynamic_idx != ELF_IDX_NULL) {
                     pr_error("Multiple SHT_DYNAMIC section headers\n");
                     return 1;
                 }
-                sht_dynamic = &shdrs->arr[i];
+                sht_dynamic_idx = i;
             }
         }
-        if (sht_dynamic) {
-            if (validate_sht_dynamic(sht_dynamic, pt_dynamic, entsize)) {
+        if (sht_dynamic_idx != ELF_IDX_NULL) {
+            if (validate_sht_dynamic(&shdrs->arr[sht_dynamic_idx],
+                                     pt_dynamic, entsize))
+            {
                 pr_error("Invalid SHT_DYNAMIC section header\n");
                 return 1;
             }
@@ -98,6 +103,10 @@ int read_validate_dynamic_section(
         }
         strtab_addr = dt_strtab->d_un.d_ptr;
         strtab_size = dt_strsz->d_un.d_val;
+        if (strtab_size == 0) {
+            pr_error("Zero-size dynamic string table\n");
+            goto err;
+        }
     }
 
     /** Ensure that the string table is within a PT_LOAD segment **/
@@ -112,11 +121,17 @@ int read_validate_dynamic_section(
     const Elf64_Off off_in_load_seg = strtab_addr - strtab_load_seg->p_vaddr;
     const Elf64_Off strtab_off = strtab_load_seg->p_offset + off_in_load_seg;
 
+    /* String tables must be NULL-terminated */
+    if (data->data[strtab_off + strtab_size - 1] != '\0') {
+        pr_error("Dynamic string table is not NULL-terminated\n");
+        goto err;
+    }
+
     /** If there's any .dynstr section header, validate it **/
-    Elf64_Shdr *strtab_shdr = NULL;
+    elf_idx_t strtab_shdr_idx = ELF_IDX_NULL;
     if (find_validate_strtab_shdr(shdrs->arr, shdrs->num,
                                   strtab_addr, strtab_off, strtab_size,
-                                  &strtab_shdr))
+                                  &strtab_shdr_idx))
     {
         pr_error("Invalid .dynstr section header\n");
         goto err;
@@ -125,19 +140,24 @@ int read_validate_dynamic_section(
     if (out != NULL) {
         out->entries.arr = arr; arr = NULL;
         out->entries.num = dynnum;
+        /* `dynnum` is `pt_dynamic->p_filesz / entsize` anyway */
+        out->entries.size = pt_dynamic->p_filesz;
         out->entries.dirty = false;
 
-        out->phdr = pt_dynamic;
-        out->shdr = sht_dynamic;
+        out->phdr = pt_dynamic_idx;
+        out->shdr = sht_dynamic_idx;
 
         out->strtab_vaddr = strtab_addr;
         out->strtab_sz = strtab_size;
         out->strtab_off = strtab_off;
-        out->strtab_shdr = strtab_shdr;
+        out->strtab_shdr = strtab_shdr_idx;
     } else {
         free(arr);
         arr = NULL;
     }
+    if (out_dynentsize != NULL)
+        *out_dynentsize = entsize;
+
     return 0;
 
 err:
@@ -277,28 +297,30 @@ err:
 
 int find_validate_strtab_shdr(Elf64_Shdr *shdrs, Elf64_Xword shnum,
                               Elf64_Addr addr, Elf64_Off off,
-                              Elf64_Xword size, Elf64_Shdr **out)
+                              Elf64_Xword size, elf_idx_t *out)
 {
-    Elf64_Shdr *shdr = NULL;
+    elf_idx_t idx = ELF_IDX_NULL;
     for (Elf64_Xword i = 0; i < shnum; i++) {
         Elf64_Shdr *const curr = &shdrs[i];
 
         if (ranges_overlap(curr->sh_addr, curr->sh_size, addr, size) ||
             ranges_overlap(curr->sh_offset, curr->sh_size, off, size))
         {
-            if (shdr != NULL) {
+            if (idx != ELF_IDX_NULL) {
                 pr_error("Multiple sections contain "
                          "the .dynamic string table\n");
                 return 1;
             }
-            shdr = curr;
+            idx = i;
         }
     }
-    if (shdr == NULL) {
+
+    if (idx == ELF_IDX_NULL) {
         /* no .dynstr section was found */
-        if (out != NULL) *out = NULL;
+        if (out != NULL) *out = ELF_IDX_NULL;
         return 0;
     }
+    const Elf64_Shdr *const shdr = &shdrs[idx];
 
     int ret = 0;
     if (shdr->sh_type != SHT_STRTAB) {
@@ -319,7 +341,7 @@ int find_validate_strtab_shdr(Elf64_Shdr *shdrs, Elf64_Xword shnum,
     }
 
     if (!ret && out != NULL)
-        *out = shdr;
+        *out = idx;
 
     return ret;
 }

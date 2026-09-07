@@ -81,13 +81,14 @@ int write_file(const char *path, const struct blob *data);
 static inline int reserve_range(Elf64_Off *off_p,
                                 Elf64_Xword size, Elf64_Off *out)
 {
-    if (*off_p > UINT64_MAX || size > UINT64_MAX - *off_p) {
+    if (size > UINT64_MAX - *off_p) {
         pr_error("Can't reserve new range (integer overflow)\n");
         return 1;
     }
 
     *out = *off_p;
     *off_p += size;
+    pr_debug("%s: out: %" PRIu64 "\n", __func__, *out);
     return 0;
 }
 
@@ -221,6 +222,20 @@ find_containing_file_ptload(const struct elf_phdrs *phdrs,
 const Elf64_Phdr *
 find_containing_memory_ptload(const struct elf_phdrs *phdrs,
                               Elf64_Addr start, Elf64_Xword size);
+
+/**
+ * Finds the start of the next segment, used to calculate how much
+ * slack space there's left for modifications.
+ *
+ * @param[in] phdrs The parsed in-memory array of program headers to search.
+ *  Must not be NULL.
+ *
+ * @param[in] pos The starting position (file offset).
+ *
+ * @return The start of the next segment from `pos`,
+ *  or `0` if no such segment exists.
+ */
+Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
 
 /**
  * Finds the section name by the `sh_name` field of a section header.

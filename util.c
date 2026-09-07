@@ -229,6 +229,26 @@ find_containing_file_ptload(const struct elf_phdrs *phdrs,
     return NULL;
 }
 
+Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos)
+{
+    if (phdrs == NULL || phdrs->arr == NULL || phdrs->num < 1) {
+        pr_error("%s: No program headers to search\n", __func__);
+        return 0;
+    }
+
+    Elf64_Off ret = 0;
+    for (Elf64_Xword i = 0; i < phdrs->num; i++) {
+        const Elf64_Phdr *const curr = &phdrs->arr[i];
+
+        if (curr->p_offset > pos && curr->p_offset < ret)
+            ret = curr->p_offset;
+    }
+
+    pr_debug("[%s] pos: 0x%" PRIx64 ", next: 0x%" PRIx64 "\n",
+             __func__, pos, ret);
+    return ret;
+}
+
 const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
 {
     if (elf == NULL || elf->shdrs.arr == NULL ||

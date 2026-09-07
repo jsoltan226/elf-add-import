@@ -4,9 +4,11 @@
 #include "elf-types.h"
 #include "elf-parsing.h"
 #include "elf-patching.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <inttypes.h>
 
 /**
@@ -38,6 +40,7 @@ struct mod_ctx {
      * - New Segment 1: Read-only
      *   1) Program headers
      *   2) Dynamic string table (.dynstr)
+     *   3) _DYNAMIC entry table (if needed)
      */
 #define N_NEW_SEGMENTS 1
 
@@ -48,7 +51,7 @@ struct mod_ctx {
         /**
          * The new segment's header; a reference into `elf->phdrs`.
          */
-        Elf64_Phdr *phdr_p;
+        elf_idx_t phdr;
 
         /** Offset of the new phdr table in the new segment. Typically 0. */
         Elf64_Off new_phoff_in_seg;
@@ -58,13 +61,111 @@ struct mod_ctx {
         Elf64_Off new_dynstr_off_in_seg;
         Elf64_Xword new_dynstr_sz; /**< New size of the dynamic string table. */
 
+        /**
+         * Whether the PT_DYNAMIC dynamic entries table needs to be moved
+         * (sometimes there's enough slack space at the end which enables
+         * adding entries without having to grow the segment itself)
+         */
+        bool dyn_tbl_move_required;
+        /**
+         * If `dyn_tbl_move_required`, the offset of the new dynamic table
+         * within the new PT_LOAD segment.
+         */
+        Elf64_Off new_dyn_tbl_off_in_seg;
+        /** If `dyn_tbl_move_required`, the size of the new dynamic table. */
+        Elf64_Xword new_dyn_tbl_sz;
+
     } first_new_ptload; /**< Contents of the first (read-only) new segment. */
+
+    /** All other metadata **/
+
+    /**
+     * Addidtional intermediate modifications state.
+     *
+     * This should store the data that cannot just be passed as simple offsets
+     * or indices and must instead be dynamically allocated and prepared.
+     */
+    struct mod_state {
+        struct dyn_mod_state {
+            /**
+             * The number of spare DT_NULL entries at the end of the _DYNAMIC array
+             * which can be replaced without needing to grow the entire segment.
+             */
+            Elf64_Xword n_spare_entries;
+
+            struct dynstr_mod_state {
+                Elf64_Xword *str_offsets;
+                Elf64_Xword n_str_offsets;
+            } dynstr;
+
+            struct dyn_tbl_mod_state {
+                /**
+                 * Array of new _DYNAMIC entries which are to be appended to the array.
+                 */
+                Elf64_Dyn *new_entries;
+                Elf64_Xword n_new_entries; /**< Count of new _DYNAMIC entries. */
+            } tbl;
+        } dyn; /**< Intermediate dynamic section modifications state. */
+    } state; /**< Intermediate modifications state. */
 };
+
+/**
+ * @struct Configuration info for the `mod_ctx` struct.
+ */
+struct mod_cfg {
+    /** Configuration data for the dynamic string table modifications. */
+    struct dynstr_mod_cfg {
+        /**
+         * An array with `n_strings` members which contains strings
+         * to be appended to the dynamic string table.
+         */
+        const char **strings;
+        Elf64_Xword n_strings; /**< Count of strings to append to .dynstr. */
+    } dynstr; /**< dynstr modifications info. */
+
+    /** Configuration data for the DT_* _DYNAMIC table modifications. */
+    struct dyn_entries_mod_cfg {
+        /** Configuration data for a single DT_* dynamic entry. */
+        struct dyn_entry_cfg {
+            /**
+             * The DT_* tag (type) of the new entry.
+             * Currently supported:
+             *  - DT_NEEDED
+             */
+            Elf64_Sxword tag;
+
+            union dyn_entry_val_u {
+                /**
+                 * An index into the `dynstr.strings` array.
+                 * The new entry's `d_un.d_ptr` value will be set to point
+                 * to the place where `dynstr.strings[str_idx]` was appended.
+                 * Used with:
+                 *  - DT_NEEDED
+                 */
+                Elf64_Xword str_idx;
+            } val; /**< Info about the desired value of the new entry. */
+
+        } *arr; /**< Array of new DT_* entries to append. */
+        Elf64_Xword num; /**< Count of new DT_* entries to append. */
+    } entries; /**< _DYNAMIC entries modifications info */
+};
+
+/**
+ * Validates a user-specified modifications configuration.
+ *
+ * @param[in] cfg The configuration to validate.
+ *
+ * @return 0 if the configuration is valid, non-zero otherwise.
+ */
+static int validate_mod_cfg(const struct mod_cfg *cfg);
 
 /**
  * Performs all size calculations for the new modified data
  * and allocates the new segments, populating the modifications context
  * in preparation for `perform_modifications`.
+ *
+ * @param[in] cfg The configuration info based on which
+ *  the modifications are to be done. Must not be NULL.
  *
  * @param[in,out] elf The ELF context. Must not be NULL.
  *
@@ -72,7 +173,8 @@ struct mod_ctx {
  *
  * @return 0 on success, non-zero on failure.
  */
-static int prepare_modifications(struct elf *elf, struct mod_ctx *out);
+static int prepare_modifications(const struct mod_cfg *cfg,
+                                 struct elf *elf, struct mod_ctx *out);
 
 /**
  * Calculates the new program header table size in advance,
@@ -89,6 +191,80 @@ static int prepare_modifications(struct elf *elf, struct mod_ctx *out);
  */
 static int calculate_new_phsize(const struct elf *elf, int n_new_segments,
                                 Elf64_Xword *out);
+
+/**
+ * Calculates the new _DYNAMIC table's size as well as whether it can be
+ * modified in place (if there are enough free `DT_NULL` entries at the end),
+ * based on the user's configuration.
+ * Part of `prepare_modifications`.
+ *
+ * @param[in] elf The ELF context. Must not be NULL.
+ *
+ * @param[in] cfg Valid user configuration. Must not be NULL.
+ *
+ * @param[out] out_move_required Output pointer for whether the _DYNAMIC table
+ *  needs to be grown & moved (`true`) or can be modified in-place (`false`).
+ *  Must not be NULL.
+ *
+ * @param[out] out_new_size If `*out_move_required == true`,
+ *  output pointer for the new file size of the _DYNAMIC table.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int calculate_dyn_tbl_mod(
+        const struct elf *elf, const struct mod_cfg *cfg,
+        bool *out_move_required, Elf64_Xword *out_new_size
+);
+
+/**
+ * Based on the current size of the string table,
+ * calculates where the user's new strings will be appended
+ * and stores that information so that it can be later used to populate
+ * new dynamic entries in `perform_modifications`.
+ * Part of `prepare_modifications`.
+ *
+ * @param[in] cfg Valid user-specified modifications configuration
+ *  containing the strings to be later appended to the dynamic string table.
+ *  Must not be NULL.
+ *
+ * @param[in] old_strtab_sz The previous size of the dynamic string table
+ *  (before any modifications).
+ *
+ * @param[out] out_new_sz Output pointer for the new size of `.dynstr`
+ *  (set to `old_strtab_sz + <sum of (strlen(...cfg->strings) + 1)>`).
+ *  Must not be NULL.
+ *
+ * @param[out] out The intermediate state to be populated
+ *  (the to-be-appended strings' offsets). Must not be NULL.
+ */
+static int prepare_dynstr_offsets(
+        const struct mod_cfg *cfg, Elf64_Off old_strtab_sz,
+        Elf64_Xword *out_new_sz, struct dynstr_mod_state *out
+);
+
+/**
+ * Resolves the contents of new dynamic entries based on
+ * previously computed data and the user's configuration.
+ * Part of `prepare_modifications`.
+ *
+ * @param[in] cfg Valid user-specified modifications configuration
+ *  containing information to be resolved into dynamic entries.
+ *  Must not be NULL.
+ *
+ * @param[in] dynstr_state Previously computed dynamic string table state
+ *  (see `prepare_dynstr_offsets`). Must not be NULL.
+ *
+ * @param[out] out The intermediate state to be populated
+ *  (the new _DYNAMIC entries). Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int prepare_dyn_entries(
+        const struct mod_cfg *cfg,
+        const struct dynstr_mod_state *dynstr_state,
+        struct dyn_tbl_mod_state *out
+);
 
 /**
  * Allocates and appends a new PT_LOAD segment.
@@ -120,9 +296,14 @@ static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
  *
  * @param[in] ctx The modifications context. Must not be NULL.
  *
+ * @param[in] cfg The user-specified configuration of the modifications
+ *  to be performed. Must be the exact same one that was passed to
+ *  `prepare_modifications`. Must not be NULL.
+ *
  * @return 0 on success, non-zero on failure.
  */
-static int perform_modifications(struct elf *elf, const struct mod_ctx *ctx);
+static int perform_modifications(struct elf *elf, const struct mod_ctx *ctx,
+                                 const struct mod_cfg *cfg);
 
 /**
  * Updates the location of the program headers, allocates new space for them
@@ -151,7 +332,7 @@ static int move_program_headers(
 
 /**
  * Allocates new space for the dynstr section, moves the data there
- * erasing the old bytes and adds a test modification at the end.
+ * erasing the old bytes and appends whatever is specified in the mod config.
  *
  * The data is just a string table, so it's moved directly in this function
  * and won't be further populated by `serialize_elf`.
@@ -168,11 +349,53 @@ static int move_program_headers(
  * @param[in] new_dynstr_sz The calculated new size of the
  *  dynamic string table (".dynstr").
  *
+ * @param[in] state Intermediate dynstr modifications state,
+ *  populated by `prepare_dynstr_offsets`. Must not be NULL.
+ *
+ * @param[in] cfg User-specified configuration information, previously
+ *  validated by `validate_mod_cfg`, containing the strings to be appended.
+ *  Must not be NULL.
+ *
  * @return 0 on success, non-zero on failure.
  */
 static int grow_move_modify_dynstr(
         struct elf *elf, const Elf64_Phdr *new_seg,
-        Elf64_Off new_dynstr_off_in_seg, Elf64_Xword new_dynstr_sz
+        Elf64_Off new_dynstr_off_in_seg, Elf64_Xword new_dynstr_sz,
+        const struct dynstr_mod_state *state,
+        const struct dynstr_mod_cfg *cfg
+);
+
+/**
+ * Based on the state computed in `prepare_modifications`:
+ *  - If needed, moves the dynamic table to the new segment & grows it,
+ *  - Resolves the entries' contents and appends them to the end of the table.
+ *
+ * Part of `perform_modifications`.
+ *
+ * @param[in,out] elf The ELF context. Must not be NULL.
+ *
+ * @param[in] new_seg The new first (read-only) PT_LOAD segment program header.
+ *  Must not be NULL.
+ *
+ * @param[in] new_dyn_tbl_off_in_seg The previously calculated
+ *  dynamic table's offset within the new segment.
+ *
+ * @param[in] new_dyn_tbl_sz The previously calculated
+ *  dynamic table's new file size.
+ *
+ * @param[in] move_required A flag indicating whether the table needs to be
+ *  resized & moved. Set to `false` if there are enough slack `DT_NULL`s
+ *  already present at the end of the table which can be replaced to acommodate
+ *  the new entries. Set to `true` otherwise.
+ *
+ * @param[in] state Intermediate _DYNAMIC table modifications state,
+ *  containing the to-be-appended new dynamic entries' contents,
+ *  previously populated by `prepare_dyn_entries`. Must not be NULL.
+ */
+static int add_new_dynamic_entries(
+        struct elf *elf, const Elf64_Phdr *new_seg,
+        Elf64_Off new_dyn_tbl_off_in_seg, Elf64_Xword new_dyn_tbl_sz,
+        bool move_required, const struct dyn_tbl_mod_state *state
 );
 
 /**
@@ -258,19 +481,37 @@ int main(int argc, char **argv)
         list_sections(&elf);
     }
 
+    const struct mod_cfg cfg = {
+        .dynstr = {
+            .n_strings = 1,
+            .strings = (const char *[]) {
+                (elf.ident.clazz == ELFCLASS32) ?
+                    "bin/libsus32.so" :
+                    "bin/libsus.so"
+            }
+        },
+        .entries = {
+            .num = 1,
+            .arr = &(struct dyn_entry_cfg) {
+                    .tag = DT_NEEDED,
+                    .val.str_idx = 0
+             }
+        }
+    };
+
     /** Modify the ELF **/
     {
         /** Calculate where we want to move the modified data as well as
          * how large it is, then create new PT_LOAD segments for it */
         struct mod_ctx m = { 0 };
-        if (prepare_modifications(&elf, &m)) {
+        if (prepare_modifications(&cfg, &elf, &m)) {
             destroy_modifications(&m);
             goto err;
         }
 
         /** Based on the previous calculations, move the data to the new segments
          * and modify it */
-        if (perform_modifications(&elf, &m)) {
+        if (perform_modifications(&elf, &m, &cfg)) {
             destroy_modifications(&m);
             goto err;
         }
@@ -287,6 +528,7 @@ int main(int argc, char **argv)
         printf("Validating patched data... ");
         if (parse_elf(&elf.data, NULL, false)) {
             printf("Sanity check failed\n");
+            /* write the corrupted file anyway for inspection */
             (void) write_file(argv[2], &elf.data);
             goto err;
         }
@@ -306,8 +548,8 @@ err:
 
 static void list_sections(const struct elf *elf)
 {
-    for (Elf64_Xword i = 0; i < elf->shdrs.num; i++) {
-        const Elf64_Shdr *const shdr = &elf->shdrs.arr[i];
+    for (elf_idx_t i = 0; i < elf->shdrs.num; i++) {
+        const Elf64_Shdr *const shdr = get_shdr_ro(elf, i);
 
         pr_debug("Section: %-20s \"%s\"\n",
                  section_header_type_toString(shdr->sh_type),
@@ -315,27 +557,102 @@ static void list_sections(const struct elf *elf)
         );
     }
 
-    if (elf->dyn.shdr != NULL) {
+    if (elf->dyn.shdr != ELF_IDX_NULL) {
+        const Elf64_Shdr *const shdr = get_shdr_ro(elf, elf->dyn.shdr);
         printf("Dynamic section name: \"%s\"\n",
-                section_name_strptr(elf, elf->dyn.shdr->sh_name));
+                section_name_strptr(elf, shdr->sh_name));
     }
-    if (elf->dyn.strtab_shdr != NULL) {
+    if (elf->dyn.strtab_shdr != ELF_IDX_NULL) {
+        const Elf64_Shdr *const shdr = get_shdr_ro(elf, elf->dyn.strtab_shdr);
         printf("Dynamic string table section name: \"%s\"\n",
-                section_name_strptr(elf, elf->dyn.strtab_shdr->sh_name));
+                section_name_strptr(elf, shdr->sh_name));
     }
 }
 
-static int prepare_modifications(struct elf *elf, struct mod_ctx *out)
+static int validate_mod_cfg(const struct mod_cfg *cfg)
+{
+    if (cfg == NULL) {
+        pr_error("Mod config is NULL\n");
+        return -1;
+    }
+
+    if (cfg->dynstr.strings == NULL && cfg->dynstr.n_strings > 0) {
+        pr_error("New dynstr strings array is NULL while count > 0\n");
+        return 1;
+    }
+    if (cfg->entries.arr == NULL && cfg->entries.num > 0) {
+        pr_error("New dynamic entries array is NULL while count > 0\n");
+        return 1;
+    }
+
+    if (cfg->entries.num > SIZE_MAX || cfg->dynstr.n_strings > SIZE_MAX) {
+        pr_error("Number of array members too large (integer overflow)\n");
+        return 1;
+    }
+
+    for (Elf64_Xword i = 0; i < cfg->dynstr.n_strings; i++) {
+        if (cfg->dynstr.strings[i] == NULL) {
+            pr_error("String @ idx %" PRIu64 " is NULL\n", i);
+            return 1;
+        }
+    }
+
+    for (Elf64_Xword i = 0; i < cfg->entries.num; i++) {
+        const struct dyn_entry_cfg *const curr = &cfg->entries.arr[i];
+
+        switch (curr->tag) {
+            case DT_NEEDED:
+                if (curr->val.str_idx >= cfg->dynstr.n_strings) {
+                    pr_error("Entry @ idx %" PRIu64 " (tag: %s): "
+                             "Invalid string table index\n",
+                             i, dynamic_tag_to_string(curr->tag));
+                    return 1;
+                }
+                break;
+            default:
+                pr_error("Unsupported dynamic tag: %s\n",
+                         dynamic_tag_to_string(curr->tag));
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int prepare_modifications(const struct mod_cfg *cfg,
+                                 struct elf *elf, struct mod_ctx *out)
 {
     memset(out, 0, sizeof(struct mod_ctx));
 
+    if (validate_mod_cfg(cfg)) {
+        pr_error("Invalid modifications configuration data\n");
+        return -1;
+    }
 
-    Elf64_Xword new_phsize;
-    if (calculate_new_phsize(elf, N_NEW_SEGMENTS, &new_phsize))
-        return 1;
+    /* Calculate the sizes and prepare state
+     * for `perform_modifications` (`out->state`) */
+    Elf64_Xword new_phsize = 0;
+    bool dyn_tbl_move_needed = false;
+    Elf64_Xword new_dyn_tbl_sz = 0;
+    Elf64_Xword new_dynstr_sz = 0;
+    {
+        if (calculate_new_phsize(elf, N_NEW_SEGMENTS, &new_phsize))
+            return 1;
+
+        if (calculate_dyn_tbl_mod(elf, cfg,
+                    &dyn_tbl_move_needed, &new_dyn_tbl_sz))
+            return 1;
+
+        if (prepare_dynstr_offsets(cfg, elf->dyn.strtab_sz,
+                                   &new_dynstr_sz, &out->state.dyn.dynstr))
+            return 1;
+
+        if (prepare_dyn_entries(cfg, &out->state.dyn.dynstr,
+                                &out->state.dyn.tbl))
+            return 1;
+    }
 
     /* The first segment (read-only) */
-    Elf64_Xword first_ptload_idx = -1;
     {
         Elf64_Off r = 0;
 
@@ -345,26 +662,36 @@ static int prepare_modifications(struct elf *elf, struct mod_ctx *out)
             return 1;
 
         /* 2) The .dynstr section */
-        const Elf64_Xword old_dynstr_sz = elf->orig.dyn_strtab_sz;
-        const Elf64_Xword new_dynstr_sz = sizeof("sus") + old_dynstr_sz;
-        Elf64_Addr new_dynstr_off_in_seg;
+        Elf64_Addr new_dynstr_off_in_seg = 0;
         if (reserve_range(&r, new_dynstr_sz, &new_dynstr_off_in_seg))
             return 1;
 
+        /* 3) The _DYNAMIC entry table (if needed) */
+        Elf64_Off new_dyn_tbl_off_in_seg = 0;
+        if (dyn_tbl_move_needed) {
+            if (reserve_range(&r, new_dyn_tbl_sz, &new_dyn_tbl_off_in_seg))
+                return 1;
+        }
+
         /** Create the new segment **/
+        Elf64_Xword first_ptload_idx = -1;
         if (append_new_ptload_segment(elf, r, PF_R, &first_ptload_idx))
             return 1;
 
         out->first_new_ptload = (struct first_new_ptload) {
+            .phdr = first_ptload_idx,
+
             .new_phoff_in_seg = phdrs_off_in_seg,
             .new_phsize = new_phsize,
 
             .new_dynstr_off_in_seg = new_dynstr_off_in_seg,
-            .new_dynstr_sz = new_dynstr_sz
+            .new_dynstr_sz = new_dynstr_sz,
+
+            .dyn_tbl_move_required = dyn_tbl_move_needed,
+            .new_dyn_tbl_off_in_seg = new_dyn_tbl_off_in_seg,
+            .new_dyn_tbl_sz = new_dyn_tbl_sz,
         };
     }
-
-    out->first_new_ptload.phdr_p = &elf->phdrs.arr[first_ptload_idx];
 
     return 0;
 }
@@ -385,6 +712,122 @@ static int calculate_new_phsize(const struct elf *elf, int n_new_segments,
     return 0;
 }
 
+static int calculate_dyn_tbl_mod(
+        const struct elf *elf, const struct mod_cfg *cfg,
+        bool *out_move_required, Elf64_Xword *out_new_size
+)
+{
+    const struct elf_dyn_entries *const entries = &elf->dyn.entries;
+
+    if (entries->num > UINT64_MAX - cfg->entries.num ||
+        entries->num > SIZE_MAX - cfg->entries.num)
+    {
+        pr_error("Can't add more dynamic entries (integer overflow)\n");
+        return 1;
+    }
+    const Elf64_Xword new_num = entries->num + cfg->entries.num;
+
+    if (new_num > UINT64_MAX / elf->dynentsize) {
+        pr_error("Can't add more dynamic entries (integer overflow)\n");
+        return 1;
+    }
+
+    Elf64_Xword n_spare = 0;
+    if (entries->num > 0) {
+        Elf64_Xword n_dt_null = 0;
+        for (Elf64_Xword i = entries->num - 1; i-- > 0; ) {
+            if (entries->arr[i].d_tag == DT_NULL)
+                n_dt_null++;
+            else
+                break;
+        }
+
+        if (n_dt_null > 1) {
+            /* we need at least one DT_NULL entry to terminate the array */
+            n_spare = n_dt_null - 1;
+        }
+    }
+
+    if ((*out_move_required = n_spare < 1)) {
+        *out_new_size = new_num * elf->dynentsize;
+    } else {
+        *out_new_size = 0;
+    }
+
+    return 0;
+}
+
+static int prepare_dynstr_offsets(
+        const struct mod_cfg *cfg, Elf64_Off old_strtab_sz,
+        Elf64_Xword *out_new_sz, struct dynstr_mod_state *out
+)
+{
+    out->n_str_offsets = 0;
+    out->str_offsets = NULL;
+
+    out->str_offsets = calloc(cfg->dynstr.n_strings, sizeof(Elf64_Xword));
+    if (out->str_offsets == NULL) {
+        pr_error("Failed to allocate the dynstr offsets array\n");
+        return 1;
+    }
+    out->n_str_offsets = cfg->dynstr.n_strings;
+
+    Elf64_Off r = old_strtab_sz;
+    for (Elf64_Xword i = 0; i < cfg->dynstr.n_strings; i++) {
+        size_t len;
+        if ((len = strlen(cfg->dynstr.strings[i])) > UINT64_MAX - 1) {
+            pr_error("String too long (integer overflow)\n");
+            return 1;
+        }
+
+        if (reserve_range(&r, len + 1, &out->str_offsets[i]))
+            return 1;
+    }
+
+    *out_new_sz = r;
+
+    return 0;
+}
+
+static int prepare_dyn_entries(
+        const struct mod_cfg *cfg,
+        const struct dynstr_mod_state *dynstr_state,
+        struct dyn_tbl_mod_state *out
+)
+{
+    out->n_new_entries = 0;
+    out->new_entries = NULL;
+
+    out->new_entries = calloc((size_t)cfg->entries.num, sizeof(Elf64_Dyn));
+    if (out->new_entries == NULL) {
+        pr_error("Failed to allocate the new DYNAMIC entries array\n");
+        return 1;
+    }
+    out->n_new_entries = cfg->entries.num;
+
+    for (Elf64_Xword i = 0; i < cfg->entries.num; i++) {
+        Elf64_Dyn *const o = &out->new_entries[i];
+        const struct dyn_entry_cfg *const c = &cfg->entries.arr[i];
+
+        o->d_tag = c->tag;
+        switch (c->tag) {
+            case DT_NEEDED: {
+                if (c->val.str_idx >= dynstr_state->n_str_offsets) {
+                    pr_error("dynstr relocation index out of bounds\n");
+                    return 1;
+                }
+                o->d_un.d_ptr = dynstr_state->str_offsets[c->val.str_idx];
+                break;
+            }
+            default:
+                pr_error("%s: Invalid state\n", __func__);
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
 static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
                                      Elf64_Xword *out_idx)
 {
@@ -401,7 +844,7 @@ static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
         return 1;
     }
 
-    Elf64_Phdr *const new_ptload_p = &elf->phdrs.arr[new_phnum - 1];
+    Elf64_Phdr *const new_ptload_p = get_phdr_rw(elf, new_phnum - 1);
     if (construct_appended_ptload_phdr(elf, end, flags, new_ptload_p)) {
         pr_error("Failed to construct a new PT_LOAD segment header\n");
         return 1;
@@ -411,22 +854,32 @@ static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
     return 0;
 }
 
-static int perform_modifications(struct elf *elf, const struct mod_ctx *ctx)
+
+static int perform_modifications(struct elf *elf, const struct mod_ctx *ctx,
+                                 const struct mod_cfg *cfg)
 {
     /** Modify the data, moving it to the new segment **/
 
     /* The first segment (read-only) */
     {
         const struct first_new_ptload *const f = &ctx->first_new_ptload;
+        const Elf64_Phdr *const phdr = get_phdr_ro(elf, f->phdr);
 
         /* 1) The phdrs */
-        if (move_program_headers(elf, f->phdr_p,
+        if (move_program_headers(elf, phdr,
                                  f->new_phoff_in_seg, f->new_phsize))
             return 1;
 
         /* 2) The .dynstr section */
-        if (grow_move_modify_dynstr(elf, f->phdr_p,
-                                    f->new_dynstr_off_in_seg, f->new_dynstr_sz))
+        if (grow_move_modify_dynstr(elf, phdr,
+                                    f->new_dynstr_off_in_seg, f->new_dynstr_sz,
+                                    &ctx->state.dyn.dynstr, &cfg->dynstr))
+            return 1;
+
+        /* 3) The _DYNAMIC entries */
+        if (add_new_dynamic_entries(elf, phdr,
+                    f->new_dyn_tbl_off_in_seg, f->new_dyn_tbl_sz,
+                    f->dyn_tbl_move_required, &ctx->state.dyn.tbl))
             return 1;
     }
 
@@ -462,11 +915,11 @@ static int move_program_headers(
 
 static int grow_move_modify_dynstr(
         struct elf *elf, const Elf64_Phdr *new_seg,
-        Elf64_Off new_dynstr_off_in_seg, Elf64_Xword new_dynstr_sz
+        Elf64_Off new_dynstr_off_in_seg, Elf64_Xword new_dynstr_sz,
+        const struct dynstr_mod_state *state,
+        const struct dynstr_mod_cfg *cfg
 )
 {
-    pr_debug("new_dynstr_sz: %" PRIu64 "\n", new_dynstr_sz);
-
     const Elf64_Off old_off = elf->orig.dyn_strtab_off;
     const Elf64_Xword old_size = elf->orig.dyn_strtab_sz;
 
@@ -485,7 +938,75 @@ static int grow_move_modify_dynstr(
         return 1;
     }
 
-    memcpy(&elf->data.data[new_off + old_size], "sus", sizeof("sus"));
+    for (Elf64_Xword i = 0; i < state->n_str_offsets; i++) {
+        memcpy(&elf->data.data[new_off + state->str_offsets[i]],
+               cfg->strings[i], strlen(cfg->strings[i]));
+    }
+
+    return 0;
+}
+
+static int add_new_dynamic_entries(
+        struct elf *elf, const Elf64_Phdr *new_seg,
+        Elf64_Off new_dyn_tbl_off_in_seg, Elf64_Xword new_size,
+        bool move_required, const struct dyn_tbl_mod_state *state
+)
+{
+    /** First, if needed, move & resize the _DYNAMIC table **/
+    if (move_required) {
+        Elf64_Off old_off;
+        Elf64_Xword old_size;
+        {
+            const Elf64_Phdr *const pt_dynamic =
+                get_phdr_ro(elf, elf->dyn.phdr);
+            old_off = pt_dynamic->p_offset;
+            old_size = pt_dynamic->p_filesz;
+        }
+
+        const Elf64_Off new_off = new_seg->p_offset + new_dyn_tbl_off_in_seg;
+
+        /* already checked in `prepare_modifications`
+         * (`calculate_dyn_tbl_mod`) */
+        const size_t new_dynnum = elf->dyn.entries.num + state->n_new_entries;
+        const Elf64_Xword calculated_new_size = new_dynnum * elf->dynentsize;
+        assert(calculated_new_size == new_size);
+
+        pr_debug("old_off: %lu, new_off: %lu\n", old_off, new_off);
+
+        if (prepare_move_data(true, &elf->data,
+                              old_off, old_size, new_off, new_size))
+        {
+            pr_error("Failed to prepare the dynamic table data "
+                    "for moving & reserialization\n");
+            return 1;
+        }
+
+        if (update_dyn_tbl_off(elf, new_off)) {
+            pr_error("Failed to move the dynamic array\n");
+            return 1;
+        }
+
+        if (update_dyn_tbl_num(elf, new_dynnum)) {
+            pr_error("Failed to grow the dynamic array\n");
+            return 1;
+        }
+    }
+
+    /** Now, append the new entries in place of the free DT_NULL ones **/
+
+    Elf64_Xword first_dt_null_idx = 0;
+    for (Elf64_Xword i = 0; i < elf->dyn.entries.num; i++) {
+        if (elf->dyn.entries.arr[i].d_tag == DT_NULL) {
+            first_dt_null_idx = i;
+            break;
+        }
+    }
+
+    memcpy(
+           &elf->dyn.entries.arr[first_dt_null_idx],
+           state->new_entries,
+           state->n_new_entries * sizeof(Elf64_Dyn)
+    );
 
     return 0;
 }
@@ -494,6 +1015,12 @@ static void destroy_modifications(struct mod_ctx *ctx)
 {
     if (ctx == NULL)
         return;
+
+    if (ctx->state.dyn.tbl.new_entries != NULL)
+        free(ctx->state.dyn.tbl.new_entries);
+
+    if (ctx->state.dyn.dynstr.str_offsets != NULL)
+        free(ctx->state.dyn.dynstr.str_offsets);
 
     /* right now `ctx` contains only references to `elf`,
      * it doesn't actually own any resources */
@@ -542,9 +1069,9 @@ static int construct_appended_ptload_phdr(const struct elf *elf,
         .p_align = new_align
     };
     pr_debug("[%s] New PT_LOAD off: 0x%" PRIx64 ", vaddr: 0x%" PRIx64 ", "
-                "size: 0x%" PRIx64 ", align: 0x%" PRIx64 "\n", __func__,
-            new_ptload_off, new_ptload_vaddr,
-            new_ptload_size, new_align);
+                "size: 0x%" PRIx64 " (0x%" PRIx64 "), align: 0x%" PRIx64 "\n",
+            __func__, new_ptload_off, new_ptload_vaddr,
+            new_ptload_size, total_content_size, new_align);
 
     return 0;
 }

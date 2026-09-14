@@ -14,6 +14,7 @@
 
 struct elf;
 struct elf_phdrs;
+struct elf_dyn_entries;
 typedef Elf64_Xword elf_idx_t;
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
@@ -218,6 +219,43 @@ find_containing_file_ptload(const struct elf_phdrs *phdrs,
  *  or `0` if no such segment exists.
  */
 Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
+
+/**
+ * @brief
+ * Finds a collection of _DYNAMIC entries by their respective tags,
+ * ensuring that each requested tag appears exactly once
+ * (i.e. no missing or duplicate entries).
+ *
+ * Example usage:
+ * ```
+ *  elf_idx_t idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
+ *  if (find_unique_dyn_entries(entries, 2,
+ *          (Elf64_Sxword[2]) { DT_STRTAB, DT_STRSZ }, idxs))
+ *  {
+ *      pr_error("Missing or duplicate DT_STRTAB and/or DT_STRSZ entries\n");
+ *      [...]
+ *  }
+ *  const elf_idx_t dt_strtab_idx = idxs[0];
+ *  const elf_idx_t dt_strsz_idx = idxs[1];
+ *  [...]
+ * ```
+ *
+ * @param[in] entries The dynamic entries array to search. Must not be NULL.
+ *
+ * @param[in] count Number of DT_* tags to look for.
+ *
+ * @param[in] tags Array of `count` DT_* tags to be found.
+ *
+ * @param[out] out Array of `count` indices. On success, `out[i]`
+ *  contains the index of the entrycorresponding to `tags[i]`.
+ *
+ * @return 0 on success,
+ *  non-zero if any of the DT_* entries are missing or have duplicates.
+ */
+int find_unique_dyn_entries(
+        const struct elf_dyn_entries *entries, size_t count,
+        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
+);
 
 /**
  * Finds the section name by the `sh_name` field of a section header.

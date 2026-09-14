@@ -254,6 +254,75 @@ struct elf {
 
         } strtab; /**< Data related to the `.dynstr` dynamic string table. */
 
+        /**
+         * @struct In-memory representation of the legacy DT_HASH
+         *  symbol lookup table. Usually not present on modern binaries,
+         *  but supported for compatibility.
+         */
+        struct elf_dt_hash {
+            /**
+             * Virtual address of the hash table header and contents;
+             * the value of the `DT_HASH` dynamic entry.
+             */
+            Elf64_Addr vaddr;
+
+            /** File offset of the hash table header and contents. */
+            Elf64_Off off;
+
+            /** Total file size of the hash table header and contents. */
+            Elf64_Xword total_size;
+
+#define DT_HASH_HDR_SIZE (2 * sizeof(Elf32_Word))
+            /**
+             * @struct Header of the DT_HASH table structure.
+             *
+             * Wire format:
+             *  =========================
+             *  | nbucket: u32          |
+             *  |-----------------------|
+             *  | nchain: u32           |
+             *  |-----------------------|
+             *  | buckets: u32[nbucket] |
+             *  /  ...                  /
+             *  |                       |
+             *  |-----------------------|
+             *  | chains: u32[nchain]   |
+             *  /  ...                  /
+             *  |                       |
+             *  =========================
+             */
+            struct elf_dt_hash_hdr {
+                Elf32_Word nbucket; /**< Number of entries in `buckets`. */
+                Elf32_Word nchain; /**< Number of entries in `chains`. */
+            } hdr; /**< Header of the DT_HASH table structure. */
+
+            /**
+             * Array of dynamic symbol table indices.
+             *
+             * During lookup, the initial symbol index is obtained as:
+             *  `index = buckets[hash(symname) % nbucket]`.
+             */
+            Elf32_Word *buckets;
+
+            /**
+             * Array of symbol table indices forming the collision chains.
+             *
+             * For a symbol index `i`, `chains[i]` gives the next symbol index
+             * in the same hash bucket. A value of `STN_UNDEF`
+             * terminates the chain.
+             *
+             * The length of this array equals the number of entries
+             * in the associated dynamic symbol table.
+             */
+            Elf32_Word *chains;
+
+            /**
+             * Index of the ".hash" SHT_HASH section header, if present;
+             * otherwise `ELF_IDX_NULL`.
+             */
+            elf_idx_t shdr;
+        } hash; /**< Data related to the legacy DT_HASH symbol lookup table. */
+
         /** @struct Data related to the dynamic symbol table (`.dynsym`). */
         struct elf_dyn_symtab {
             char _[1];

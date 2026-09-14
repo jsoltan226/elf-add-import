@@ -98,5 +98,11 @@ void destroy_elf(struct elf *elf)
     if (elf->dyn.entries.arr != NULL)
         free(elf->dyn.entries.arr);
 
+    if (elf->dyn.hash.buckets != NULL)
+        free(elf->dyn.hash.buckets);
+
+    if (elf->dyn.hash.chains != NULL)
+        free(elf->dyn.hash.chains);
+
     memset(elf, 0, sizeof(struct elf));
 }

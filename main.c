@@ -481,11 +481,9 @@ int main(int argc, char **argv)
         }
         list_sections(&elf);
 
-#if 0
         if (parse_dynsym(&elf.data, elf.ident.clazz, elf.ident.data,
                          &elf.phdrs, &elf.shdrs, &elf.dyn.entries))
             goto err;
-#endif /* 0 */
     }
 
     const struct mod_cfg cfg = {

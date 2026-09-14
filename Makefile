@@ -8,7 +8,7 @@ ASAN_FLAGS := -fsanitize=address,undefined
 CFLAGS ?=
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP
-LDFLAGS?=-pie
+LDFLAGS?=-pie -Wl,-hash-style=both
 ARFLAGS=rcs
 LIBS?=
 STRIP?=strip

@@ -1,6 +1,7 @@
 #include "util.h"
 #include "elf.h"
 #include "ctx.h"
+#include "elf-types.h"
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -246,6 +247,42 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos)
 
     pr_debug("[%s] pos: 0x%" PRIx64 ", next: 0x%" PRIx64 "\n",
              __func__, pos, ret);
+    return ret;
+}
+
+int find_unique_dyn_entries(
+        const struct elf_dyn_entries *entries, size_t count,
+        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
+)
+{
+    int ret = 0;
+
+    for (size_t i = 0; i < count; i++)
+        out[i] = ELF_IDX_NULL;
+
+    for (Elf64_Xword i = 0; i < entries->num; i++) {
+        const Elf64_Sxword t = entries->arr[i].d_tag;
+        for (size_t j = 0; j < count; j++) {
+            if (t == tags[j]) {
+                if (out[j] != ELF_IDX_NULL) {
+                    pr_error("Duplicate dynamic entry %" PRIi64 " (%s)\n",
+                             t, dynamic_tag_to_string(t));
+                    ret = 1;
+                }
+                out[j] = i;
+                break;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        if (out[i] == ELF_IDX_NULL) {
+            pr_debug("Missing dynamic entry %" PRIi64 " (%s)\n",
+                     tags[i], dynamic_tag_to_string(tags[i]));
+            ret = 1;
+        }
+    }
+
     return ret;
 }
 

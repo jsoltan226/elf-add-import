@@ -620,6 +620,8 @@ int read_validate_shdrs(const struct blob *data,
     uint64_t off = ehdr->e_shoff;
     Elf64_Shdr shdr = { 0 };
 
+    uint8_t duplicates_bitfield = 0x00;
+
     for (Elf64_Xword i = 0; i < shnum; i++) {
         if (read_shdr(data, &off, clazz, encoding, &shdr)) {
             pr_error("Couldn't read section header no %" PRIu64
@@ -634,6 +636,26 @@ int read_validate_shdrs(const struct blob *data,
             break;
         }
 
+        /* these section types cannot have duplicates */
+        elf_idx_t idx = ELF_IDX_NULL;
+        switch (shdr.sh_type) {
+            case SHT_DYNAMIC:   idx = 0; break;
+            case SHT_HASH:      idx = 1; break;
+            case SHT_DYNSYM:    idx = 2; break;
+            case SHT_GNU_HASH:  idx = 3; break;
+            default:
+                goto skip_duplicates_check;
+        }
+        const uint8_t mask = UINT8_C(1) << idx;
+
+        if (duplicates_bitfield & mask) {
+            pr_error("Duplicate \"%s\" section header\n",
+                     section_header_type_toString(shdr.sh_type));
+            ret = 1;
+        }
+        duplicates_bitfield |= mask;
+
+skip_duplicates_check:
         if (!ret)
             memcpy(&arr[i], &shdr, sizeof(Elf64_Shdr));
     }

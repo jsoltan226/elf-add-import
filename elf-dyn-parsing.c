@@ -3,14 +3,10 @@
 #include "elf.h"
 #include "util.h"
 #include "elf-types.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
-
-static int find_unique_dyn_entries(
-        const struct elf_dyn_entries *entries, size_t count,
-        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
-);
 
 /**
  * Finds and validates the PT_DYNAMIC program header.
@@ -143,6 +139,33 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
                                      Elf64_Addr addr, Elf64_Off off,
                                      Elf64_Xword size, elf_idx_t *out);
 
+/**
+ * Parses the legacy DT_HASH symbol lookup table structure.
+ *
+ * @param[in] data The ELF file data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] entries The dynamic entries array. Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx The index of the SHT_DYNSYM section header,
+ *  if present (otherwise `ELF_IDX_NULL`).
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ */
+static int parse_dt_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_hash *out
+);
+
 int parse_dyn(
         const struct blob *data, int clazz, int encoding,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
@@ -155,93 +178,61 @@ int parse_dyn(
         return -1;
     }
 
-    if (out != NULL)
-        memset(out, 0, sizeof(struct elf_dynamic));
-    if (out_dynentsize != NULL)
-        *out_dynentsize = 0;
+    struct elf_dynamic dyn = { 0 };
+    int ret = 1;
 
     const Elf64_Half entsize = clazz == ELFCLASS32 ?
         sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
-    *out_dynentsize = entsize;
 
     /* Find and validate the PT_DYNAMIC program header */
     Elf64_Xword dynnum = 0;
-    if (find_validate_pt_dynamic(phdrs, entsize, &out->phdr, &dynnum)) {
+    if (find_validate_pt_dynamic(phdrs, entsize, &dyn.phdr, &dynnum)) {
         pr_error("Missing or invalid PT_DYNAMIC program header\n");
         goto err;
     }
 
     /* If present, validate the section header against the program header */
-    if (validate_sht_dynamic_if_exists(shdrs, phdrs, out->phdr, entsize,
-                                       &out->shdr))
+    if (validate_sht_dynamic_if_exists(shdrs, phdrs, dyn.phdr, entsize,
+                                       &dyn.shdr))
     {
         pr_error("Invalid SHT_DYNAMIC .dynamic section header\n");
         goto err;
     }
 
     /* Parse the ElfXX_Dyn entries */
-    if (parse_dyn_table(data, clazz, encoding, dynnum, phdrs, out->phdr,
-                        &out->entries))
+    if (parse_dyn_table(data, clazz, encoding, dynnum, phdrs, dyn.phdr,
+                        &dyn.entries))
     {
         pr_error("Failed to parse the dynamic entry array\n");
         goto err;
     }
     pr_debug("Number of dynamic entries: %" PRIu64 "\n", dynnum);
 
-    if (parse_dynstr(data, &out->entries, phdrs, shdrs, &out->strtab)) {
+    if (parse_dynstr(data, &dyn.entries, phdrs, shdrs, &dyn.strtab)) {
         pr_error("Invalid or missing .dynstr dynamic string table\n");
         goto err;
     }
-    if (out->shdr != ELF_IDX_NULL) {
+    if (dyn.shdr != ELF_IDX_NULL) {
         /* .dynamic's `sh_link` must point to .dynstr */
-        if (shdrs->arr[out->shdr].sh_link != out->strtab.shdr) {
+        if (shdrs->arr[dyn.shdr].sh_link != dyn.strtab.shdr) {
             pr_error("SHT_DYNAMIC's sh_link doesn't point to .dynstr\n");
             goto err;
         }
     }
 
-    return 0;
+    ret = 0;
 
 err:
-    if (out->entries.arr != NULL)
-        free(out->entries.arr);
-    memset(out, 0, sizeof(struct elf_dynamic));
-    *out_dynentsize = 0;
-    return 1;
-}
-
-static int find_unique_dyn_entries(
-        const struct elf_dyn_entries *entries, size_t count,
-        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
-)
-{
-    int ret = 0;
-
-    for (size_t i = 0; i < count; i++)
-        out[i] = ELF_IDX_NULL;
-
-    for (Elf64_Xword i = 0; i < entries->num; i++) {
-        const Elf64_Sxword t = entries->arr[i].d_tag;
-        for (size_t j = 0; j < count; j++) {
-            if (t == tags[j]) {
-                if (out[j] != ELF_IDX_NULL) {
-                    pr_error("Duplicate dynamic entry %" PRIi64 " (%s)\n",
-                             t, dynamic_tag_to_string(t));
-                    ret = 1;
-                }
-                out[j] = i;
-                break;
-            }
-        }
+    if (ret || out == NULL) {
+        if (dyn.entries.arr != NULL)
+            free(dyn.entries.arr);
+    } else if (!ret && out != NULL) {
+        *out = dyn;
     }
+    memset(&dyn, 0, sizeof(struct elf_dynamic));
 
-    for (size_t i = 0; i < count; i++) {
-        if (out[i] == ELF_IDX_NULL) {
-            pr_error("Missing dynamic entry %" PRIi64 " (%s)\n",
-                     tags[i], dynamic_tag_to_string(tags[i]));
-            ret = 1;
-        }
-    }
+    if (!ret && out_dynentsize != NULL)
+        *out_dynentsize = entsize;
 
     return ret;
 }
@@ -553,7 +544,259 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
     return ret;
 }
 
-#if 0
+static int find_dt_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
+        struct elf_dt_hash *out
+)
+{
+    elf_idx_t dt_hash_idx = ELF_IDX_NULL;
+    if (find_unique_dyn_entries(entries, 1,
+                (Elf64_Sxword[]) { DT_HASH }, &dt_hash_idx))
+    {
+        pr_debug("Duplicate or missing DT_HASH entry\n");
+        return 1;
+    }
+    const Elf64_Addr dt_hash_vaddr = entries->arr[dt_hash_idx].d_un.d_ptr;
+
+    /* same across both classes */
+    struct elf_dt_hash_hdr hdr = { 0 };
+
+    const elf_idx_t pt_load_idx =
+        find_containing_mem_ptload(phdrs, dt_hash_vaddr, DT_HASH_HDR_SIZE);
+    if (pt_load_idx == ELF_IDX_NULL) {
+        pr_error("DT_HASH table header not inside any PT_LOAD segment\n");
+        return 1;
+    }
+    const Elf64_Phdr *const pt_load = &phdrs->arr[pt_load_idx];
+
+    const Elf64_Off off_in_load_seg = dt_hash_vaddr - pt_load->p_vaddr;
+    if (off_in_load_seg > UINT64_MAX - pt_load->p_offset) {
+        pr_error("DT_HASH offset in load segment too large "
+                "(integer overflow)\n");
+        return 1;
+    }
+    const Elf64_Off dt_hash_off = pt_load->p_offset + off_in_load_seg;
+
+    if (find_containing_file_ptload(phdrs, dt_hash_off, DT_HASH_HDR_SIZE)
+            != pt_load_idx)
+    {
+        pr_error("DT_HASH header isn't file-backed by its PT_LOAD segment\n");
+        return 1;
+    }
+
+    /* read the header */
+    uint64_t off = dt_hash_off;
+    if (read_Word(data, &off, clazz, encoding, &hdr.nbucket) ||
+        read_Word(data, &off, clazz, encoding, &hdr.nchain) ||
+        (off < dt_hash_off || off != dt_hash_off + DT_HASH_HDR_SIZE) ||
+        (size_t)hdr.nbucket != hdr.nbucket || (size_t)hdr.nchain != hdr.nchain)
+    {
+        pr_error("Failed to read the DT_HASH table header\n");
+        return 1;
+    }
+    /* during lookup, a modulo operation like this is performed:
+     *  `index = bucket[hash(name) % nbucket]`
+     * so it must not be zero.
+     *
+     * also, `nchain` is the number of entries in the associated dynsym table,
+     * which contains at least one reserved STN_UNDEF entry.
+     */
+    if (hdr.nbucket == 0 || hdr.nchain == 0) {
+        pr_error("DT_HASH table nbucket and nchain must be greater than 0\n");
+        return 1;
+    }
+
+    /* none of this can ever overflow a uint64_t */
+    const uint64_t buckets_total_size = hdr.nbucket * sizeof(Elf32_Word);
+    const uint64_t chains_total_size = hdr.nchain * sizeof(Elf32_Word);
+    const Elf64_Xword dt_hash_total_size =
+            DT_HASH_HDR_SIZE + buckets_total_size + chains_total_size;
+
+    if (find_containing_file_ptload(phdrs, dt_hash_off, dt_hash_total_size) !=
+            pt_load_idx)
+    {
+        pr_error("DT_HASH size and/or offset invalid\n");
+        return 1;
+    }
+
+    out->hdr = hdr;
+    out->vaddr = dt_hash_vaddr;
+    out->off = dt_hash_off;
+    out->total_size = dt_hash_total_size;
+
+    out->buckets = NULL; out->chains = NULL;
+    out->shdr = ELF_IDX_NULL;
+    return 0;
+}
+
+static int read_dt_hash_contents(
+        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
+        Elf32_Word **out_buckets, Elf32_Word **out_chains
+)
+{
+    /* the above `find_dt_hash` already validates that both
+     * `hdr->nbucket` and `hdr->nchain` are representable as size_t */
+    int ret = 1;
+    Elf32_Word *buckets = NULL, *chains = NULL;
+    if ((buckets = calloc((size_t)hdr->nbucket, sizeof(Elf32_Word)))
+            == NULL)
+    {
+        pr_error("Failed to allocate the DT_HASH bucket array\n");
+        goto err;
+    }
+    if ((chains = calloc((size_t)hdr->nchain, sizeof(Elf32_Word))) == NULL) {
+        pr_error("Failed to allocate the DT_HASH chain array\n");
+        goto err;
+    }
+
+    /* `hdr` has already been read by `find_dt_hash` */
+    *off_p += DT_HASH_HDR_SIZE;
+
+    for (Elf32_Word i = 0; i < hdr->nbucket; i++) {
+        if (read_Word(data, off_p, clazz, encoding, &buckets[i])) {
+            pr_error("Failed to read DT_HASH bucket no %" PRIu32 "\n", i);
+            goto err;
+        }
+        if (buckets[i] >= hdr->nchain) {
+            pr_error("Invalid DT_HASH bucket no %" PRIu32 "\n", i);
+            goto err;
+        }
+    }
+
+    for (Elf32_Word i = 0; i < hdr->nchain; i++) {
+        if (read_Word(data, off_p, clazz, encoding, &chains[i])) {
+            pr_error("Failed to read DT_HASH chain no %" PRIu32 "\n", i);
+            goto err;
+        }
+        if (chains[i] >= hdr->nchain) {
+            pr_error("Invalid DT_HASH chain no %" PRIu32 "\n", i);
+            goto err;
+        }
+    }
+
+    if (*off_p != end) {
+        pr_error("Invalid offset after reading the DT_HASH table "
+                 "(expected 0x%" PRIx64 ", got 0x%" PRIx64 ")\n",
+                 *off_p, end);
+        goto err;
+    }
+
+    ret = 0;
+
+err:
+    if (!ret) {
+        *out_buckets = buckets; buckets = NULL;
+        *out_chains = chains; chains = NULL;
+    } else {
+        if (buckets != NULL) {
+            free(buckets);
+            buckets = NULL;
+        }
+        if (chains != NULL) {
+            free(chains);
+            chains = NULL;
+        }
+    }
+
+    return ret;
+}
+
+static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
+                                       const struct elf_dt_hash *dt_hash,
+                                       elf_idx_t sht_dynsym_idx,
+                                       elf_idx_t *out)
+{
+    *out = ELF_IDX_NULL;
+    elf_idx_t idx = ELF_IDX_NULL;
+    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
+        if (shdrs->arr[i].sh_type == SHT_HASH) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx == ELF_IDX_NULL)
+        return 0;
+
+    int ret = 0;
+    const Elf64_Shdr *const sht_hash = &shdrs->arr[idx];
+
+    if (sht_hash->sh_addr != dt_hash->vaddr) {
+        pr_error("Invalid SHT_HASH vaddr\n");
+        ret = 1;
+    }
+    if (sht_hash->sh_offset != dt_hash->off) {
+        pr_error("Invalid SHT_HASH offset\n");
+        ret = 1;
+    }
+    if (sht_hash->sh_size != dt_hash->total_size) {
+        pr_error("Invalid SHT_HASH size\n");
+        ret = 1;
+    }
+
+    if (sht_dynsym_idx != ELF_IDX_NULL) {
+        if (sht_hash->sh_link != sht_dynsym_idx) {
+            pr_error("SHT_HASH sh_link doesn't point to SHT_DYNSYM\n");
+            ret = 1;
+        }
+    } else {
+        pr_error("SHT_HASH exists without any SHT_DYNSYM\n");
+        ret = 1;
+    }
+
+    if (sht_hash->sh_info != 0)
+        pr_error("WARNING: SHT_HASH sh_info non-zero\n");
+    if (sht_hash->sh_entsize != sizeof(Elf32_Word))
+        pr_error("WARNING: SHT_HASH sh_entsize != sizeof(Elf32_Word)\n");
+
+    if (!ret)
+        *out = idx;
+    return ret;
+}
+
+static int parse_dt_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_hash *out
+)
+{
+    *out = (struct elf_dt_hash) { 0 };
+    if (find_dt_hash(data, clazz, encoding, phdrs, entries, out))
+        goto err; /* error already printed */
+
+    uint64_t off = out->off;
+    /* `find_dt_hash` already checks that
+     * `dt_hash.off + dt_hash.total_size` doesn't overflow */
+    const uint64_t end = off + out->total_size;
+    if (read_dt_hash_contents(data, clazz, encoding, &off, &out->hdr, end,
+                              &out->buckets, &out->chains))
+    {
+        pr_error("Failed to read the DT_HASH table contents\n");
+        goto err;
+    }
+
+    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, &out->shdr)) {
+        pr_error("Invalid SHT_HASH section\n");
+        goto err;
+    }
+
+    pr_debug("DT_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 "\n",
+             out->hdr.nbucket, out->hdr.nchain);
+
+    return 0;
+
+err:
+    if (out->buckets != NULL)
+        free(out->buckets);
+    if (out->chains != NULL)
+        free(out->chains);
+
+    memset(out, 0, sizeof(struct elf_dt_hash));
+    return 1;
+}
+
 int parse_dynsym(const struct blob *data, int clazz, int encoding,
                  const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
                  const struct elf_dyn_entries *entries)
@@ -568,6 +811,7 @@ int parse_dynsym(const struct blob *data, int clazz, int encoding,
     }
     const Elf64_Dyn *const dt_symtab = &entries->arr[idxs[0]];
     const Elf64_Dyn *const dt_syment = &entries->arr[idxs[1]];
+    (void) dt_symtab;
 
     if (!((clazz == ELFCLASS32 && dt_syment->d_un.d_val == sizeof(Elf32_Sym)) ||
           (clazz == ELFCLASS64 && dt_syment->d_un.d_val == sizeof(Elf64_Sym))))
@@ -582,13 +826,23 @@ int parse_dynsym(const struct blob *data, int clazz, int encoding,
      *  https://lldb.llvm.org/cpp_reference/ObjectFileELF_8cpp_source.html
      * (line ~4315) */
 
-
-    /*
-    pr_debug("Value of DT_SYMENT for class %s: %" PRIu64 "\n",
-             clazz == ELFCLASS32 ? "ELFCLASS32" : "ELFCLASS64",
-             dt_syment->d_un.d_val);
-             */
+    elf_idx_t sht_dynsym_idx = ELF_IDX_NULL;
+    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
+        if (shdrs->arr[i].sh_type == SHT_DYNSYM) {
+            sht_dynsym_idx = i;
+            break;
+        }
+    }
+    struct elf_dt_hash dt_hash = { 0 };
+    if (parse_dt_hash(data, clazz, encoding, phdrs, shdrs,
+                      entries, sht_dynsym_idx, &dt_hash))
+    {
+        pr_error("Failed to parse DT_HASH\n");
+        return 1;
+    }
+    free(dt_hash.chains);
+    free(dt_hash.buckets);
+    dt_hash = (struct elf_dt_hash) { 0 };
 
     return 0;
 }
-#endif /* 0 */

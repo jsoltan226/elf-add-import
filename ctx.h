@@ -231,20 +231,33 @@ struct elf {
          * `read_validate_dynamic_section` might write `ELF_IDX_NULL` here. */
         elf_idx_t shdr;
 
-        /* The value of the DT_STRTAB entry;
-         * contains the virtual addres of the .dynamic string table. */
-        Elf64_Addr strtab_vaddr;
+        /** @struct Data related to the `.dynstr` dynamic string table. */
+        struct elf_dyn_strtab {
+            /* The value of the DT_STRTAB entry;
+             * contains the virtual addres of the .dynamic string table. */
+            Elf64_Addr vaddr;
 
-        /* The offset of the .dynamic string table within the ELF data */
-        Elf64_Off strtab_off;
+            /* The offset of the dynamic string table within the ELF data */
+            Elf64_Off off;
 
-        /* The value of the DT_STRSZ entry;
-         * the size of the string table pointed to by `strtab`. */
-        Elf64_Xword strtab_sz;
+            /* The value of the DT_STRSZ entry;
+             * the size of the dynamic string table (`.dynstr`). */
+            Elf64_Xword size;
 
-        /* Index of the .dynstr section header (reference into `shdrs`).
-         * Might be NULL if there's no .dynstr section. */
-        elf_idx_t strtab_shdr;
+            /* Index of the .dynstr section header (reference into `shdrs`).
+             * Might be NULL if there's no .dynstr section. */
+            elf_idx_t shdr;
+
+            /* string tables don't need any re-serialization
+             * as the singular bytes (characters) that make them up are
+             * the same across all platforms, which means no `dirty` flag. */
+
+        } strtab; /**< Data related to the `.dynstr` dynamic string table. */
+
+        /** @struct Data related to the dynamic symbol table (`.dynsym`). */
+        struct elf_dyn_symtab {
+            char _[1];
+        } symtab; /**< Data related to the dynamic symbol table (`.dynsym`). */
     } dyn; /**< Everything related to the dynamic section */
 
     /** The raw bytes of the ELF file **/

@@ -1,4 +1,5 @@
 #include "ctx.h"
+#include "elf-dyn-parsing.h"
 #include "elf.h"
 #include "util.h"
 #include "elf-types.h"
@@ -479,6 +480,12 @@ int main(int argc, char **argv)
                      "of the file, it might be already patched!\n");
         }
         list_sections(&elf);
+
+#if 0
+        if (parse_dynsym(&elf.data, elf.ident.clazz, elf.ident.data,
+                         &elf.phdrs, &elf.shdrs, &elf.dyn.entries))
+            goto err;
+#endif /* 0 */
     }
 
     const struct mod_cfg cfg = {
@@ -562,8 +569,8 @@ static void list_sections(const struct elf *elf)
         printf("Dynamic section name: \"%s\"\n",
                 section_name_strptr(elf, shdr->sh_name));
     }
-    if (elf->dyn.strtab_shdr != ELF_IDX_NULL) {
-        const Elf64_Shdr *const shdr = get_shdr_ro(elf, elf->dyn.strtab_shdr);
+    if (elf->dyn.strtab.shdr != ELF_IDX_NULL) {
+        const Elf64_Shdr *const shdr = get_shdr_ro(elf, elf->dyn.strtab.shdr);
         printf("Dynamic string table section name: \"%s\"\n",
                 section_name_strptr(elf, shdr->sh_name));
     }
@@ -643,7 +650,7 @@ static int prepare_modifications(const struct mod_cfg *cfg,
                     &dyn_tbl_move_needed, &new_dyn_tbl_sz))
             return 1;
 
-        if (prepare_dynstr_offsets(cfg, elf->dyn.strtab_sz,
+        if (prepare_dynstr_offsets(cfg, elf->dyn.strtab.size,
                                    &new_dynstr_sz, &out->state.dyn.dynstr))
             return 1;
 
@@ -843,8 +850,8 @@ static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
         pr_error("Failed to grow the program headers array\n");
         return 1;
     }
-
     Elf64_Phdr *const new_ptload_p = get_phdr_rw(elf, new_phnum - 1);
+
     if (construct_appended_ptload_phdr(elf, end, flags, new_ptload_p)) {
         pr_error("Failed to construct a new PT_LOAD segment header\n");
         return 1;

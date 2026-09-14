@@ -14,6 +14,7 @@
 
 struct elf;
 struct elf_phdrs;
+typedef Elf64_Xword elf_idx_t;
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
 
@@ -179,10 +180,10 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  * @param[in] size The size (length) of the range to check.
  *
  * @return If a segment containing the full range is found,
- *  the corresponding program header (a reference into `phdrs`).
- *  If nothing valid is found, `NULL` is returned.
+ *  the corresponding program header's index (a reference into `phdrs`).
+ *  If nothing valid is found, `ELF_IDX_NULL` is returned.
  */
-const Elf64_Phdr *
+elf_idx_t
 find_containing_mem_ptload(const struct elf_phdrs *phdrs,
                            Elf64_Addr start, Elf64_Xword size);
 
@@ -197,31 +198,12 @@ find_containing_mem_ptload(const struct elf_phdrs *phdrs,
  * @param[in] size The size (length) of the range to check.
  *
  * @return If a segment containing the full range is found,
- *  the corresponding program header (a reference into `phdrs`).
- *  If nothing valid is found, `NULL` is returned.
+ *  the corresponding program header's index (a reference into `phdrs`).
+ *  If nothing valid is found, `ELF_IDX_NULL` is returned.
  */
-const Elf64_Phdr *
+elf_idx_t
 find_containing_file_ptload(const struct elf_phdrs *phdrs,
                             Elf64_Off off, Elf64_Xword size);
-
-/**
- * Attempts to find a PT_LOAD segment
- * that contains a given virtual address range.
- *
- * @param[in] phdrs The parsed in-memory array of program headers to search.
- *  Must not be NULL.
- *
- * @param[in] start The start address of the range to check.
- *
- * @param[in] size The size (length) of the range to check.
- *
- * @return If a segment containing the full range is found,
- *  the corresponding program header (a reference into `phdrs`).
- *  If nothing valid is found, `NULL` is returned.
- */
-const Elf64_Phdr *
-find_containing_memory_ptload(const struct elf_phdrs *phdrs,
-                              Elf64_Addr start, Elf64_Xword size);
 
 /**
  * Finds the start of the next segment, used to calculate how much

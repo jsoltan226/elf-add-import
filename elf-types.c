@@ -11,6 +11,34 @@
 #include <stdalign.h>
 
 /**
+ * Reads a byte from a blob while ensuring that the offset is within bounds.
+ *
+ * @param[in] data The data to read from. Must not be NULL.
+ *
+ * @param[in,out] off_p The offset at which to read. Will be incremented
+ *  to point past the read byte on success. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the read value. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure (out of bounds).
+ */
+static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out);
+
+/**
+ * Writes a byte to a blob while ensuring that the offset is within bounds.
+ *
+ * @param[in,out] data The data to write to. Must not be NULL.
+ *
+ * @param[in,out] off_p The offset at which to write. Will be incremented
+ *  to point past the written byte on success. Must not be NULL.
+ *
+ * @param[in] val The value to write.
+ *
+ * @return 0 on success, non-zero on failure (out of bounds).
+ */
+static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val);
+
+/**
  * Before you start reading this monstrosity,
  * here is the roughly equivalent C++ pseudocode:
  *
@@ -618,6 +646,86 @@ int write_dyn(struct blob *data, uint64_t *off_p,
     return 0;
 }
 
+int read_sym(const struct blob *data, uint64_t *off_p,
+             int clazz, int encoding, Elf64_Sym *out)
+{
+
+    /* if you're wondering what's going on here, just look at the definitions
+     * of `Elf32_Sym` and `Elf64_Sym` */
+
+    if (read_Word(data, off_p, clazz, encoding, &out->st_name))
+        return 1;
+
+    if (clazz == ELFCLASS32) {
+        if (read_Addr(data, off_p, clazz, encoding, &out->st_value))
+            return 1;
+
+        Elf32_Word tmp_size;
+        if (read_Word(data, off_p, clazz, encoding, &tmp_size))
+            return 1;
+        out->st_size = (Elf64_Xword)tmp_size;
+
+    }
+
+    if (read_byte(data, off_p, &out->st_info) ||
+        read_byte(data, off_p, &out->st_other) ||
+        read_Section(data, off_p, clazz, encoding, &out->st_shndx))
+    {
+        return 1;
+    }
+
+    if (clazz == ELFCLASS64) {
+        if (read_Addr(data, off_p, clazz, encoding, &out->st_value) ||
+            read_Xword(data, off_p, clazz, encoding, &out->st_size))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int write_sym(struct blob *data, uint64_t *off_p,
+              int clazz, int encoding, const Elf64_Sym *sym)
+{
+    /* if you're wondering what's going on here, just look at the definitions
+     * of `Elf32_Sym` and `Elf64_Sym` */
+
+    if (write_Word(data, off_p, clazz, encoding, sym->st_name))
+        return 1;
+
+    if (clazz == ELFCLASS32) {
+        if (sym->st_size > UINT32_MAX) {
+            pr_error("%s: st_size value outside of 32-bit integer limit\n",
+                    __func__);
+            return 1;
+        }
+
+        if (write_Addr(data, off_p, clazz, encoding, sym->st_value) ||
+            write_Word(data, off_p, clazz, encoding, (Elf32_Word)sym->st_size))
+        {
+            return 1;
+        }
+    }
+
+    if (write_byte(data, off_p, sym->st_info) ||
+        write_byte(data, off_p, sym->st_other) ||
+        write_Section(data, off_p, clazz, encoding, sym->st_shndx))
+    {
+        return 1;
+    }
+
+    if (clazz == ELFCLASS64) {
+        if (write_Addr(data, off_p, clazz, encoding, sym->st_value) ||
+            write_Xword(data, off_p, clazz, encoding, sym->st_size))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 const char * elf_type_toString(Elf64_Half et)
 {
     switch (et) {
@@ -813,4 +921,26 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
 
             return "(unknown)";
     }
+}
+
+static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out)
+{
+    if (*off_p >= data->size) {
+        pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n", __func__, *off_p);
+        return 1;
+    }
+
+    *out = data->data[(*off_p)++];
+    return 0;
+}
+
+static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val)
+{
+    if (*off_p >= data->size) {
+        pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n", __func__, *off_p);
+        return 1;
+    }
+
+    data->data[(*off_p)++] = val;
+    return 0;
 }

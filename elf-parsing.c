@@ -541,14 +541,14 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
         struct elf_phdrs tmp = { .arr = arr, .num = phnum, .size = phsize };
         if (found_pt_phdr &&
                 find_containing_mem_ptload(&tmp,
-                        pt_phdr.p_vaddr, pt_phdr.p_memsz) == NULL)
+                        pt_phdr.p_vaddr, pt_phdr.p_memsz) == ELF_IDX_NULL)
         {
             pr_error("PT_PHDR is not contained in any PT_LOAD segment\n");
             ret = 1;
         }
         if (found_pt_dynamic &&
                 find_containing_mem_ptload(&tmp,
-                    pt_dynamic.p_vaddr, pt_dynamic.p_memsz) == NULL)
+                    pt_dynamic.p_vaddr, pt_dynamic.p_memsz) == ELF_IDX_NULL)
         {
             pr_error("PT_DYNAMIC is not contained in any PT_LOAD segment\n");
             ret = 1;
@@ -686,10 +686,8 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
         goto err;
     }
 
-    if (read_validate_dynamic_section(data, c, d, &e.phdrs, &e.shdrs,
-                                      &e.dyn, &e.dynentsize))
-    {
-        pr_error("Invalid or missing dynamic segment\n");
+    if (parse_dyn(data, c, d, &e.phdrs, &e.shdrs, &e.dyn, &e.dynentsize)) {
+        pr_error("Invalid or missing dynamic linking information\n");
         goto err;
     }
 
@@ -712,9 +710,9 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
     e.orig.shnum = e.shdrs.num;
     e.orig.shsize = e.shdrs.size;
     e.orig.shstrndx = e.shstrndx;
-    e.orig.dyn_strtab_off = e.dyn.strtab_off;
-    e.orig.dyn_strtab_sz = e.dyn.strtab_sz;
-    e.orig.dyn_strtab_vaddr = e.dyn.strtab_vaddr;
+    e.orig.dyn_strtab_off = e.dyn.strtab.off;
+    e.orig.dyn_strtab_sz = e.dyn.strtab.size;
+    e.orig.dyn_strtab_vaddr = e.dyn.strtab.vaddr;
     e.phentsize = e.ehdr.e_phentsize;
     e.shentsize = e.ehdr.e_shentsize;
 
@@ -1207,6 +1205,12 @@ static int validate_shdr(
     {
         pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
                  "Section overflows data buffer\n", i, off);
+        ret = 1;
+    }
+
+    if (shdr->sh_addr > UINT64_MAX - shdr->sh_size) {
+        pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
+                "Section overflows address space\n", i, off);
         ret = 1;
     }
 

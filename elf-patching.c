@@ -85,12 +85,13 @@ int update_phoff(struct elf *elf, Elf64_Off new_off)
     }
     const Elf64_Xword phsize = elf->phdrs.size;
 
-    const Elf64_Phdr *ptload =
+    const elf_idx_t ptload_idx =
         find_containing_file_ptload(&elf->phdrs, new_off, phsize);
-    if (ptload == NULL) {
+    if (ptload_idx == ELF_IDX_NULL) {
         pr_error("New program header location not inside any PT_LOAD segment\n");
         return -1;
     }
+    const Elf64_Phdr *const ptload = get_phdr_ro(elf, ptload_idx);
 
     const Elf64_Xword data_size = elf->data.size;
     if (phsize > data_size || new_off > data_size - phsize) {
@@ -194,9 +195,9 @@ int update_shoff(struct elf *elf, Elf64_Off new_off)
     }
     const Elf64_Xword shsize = elf->shdrs.size;
 
-    const Elf64_Phdr *ptload =
-        find_containing_file_ptload(&elf->phdrs, new_off, shsize);
-    if (ptload == NULL) {
+    if (find_containing_file_ptload(&elf->phdrs, new_off, shsize)
+            == ELF_IDX_NULL)
+    {
         pr_error("New section header location not inside any PT_LOAD segment\n");
         return -1;
     }
@@ -296,13 +297,14 @@ int update_dynstr_range(struct elf *elf,
         return -1;
     }
 
-    const Elf64_Phdr *const pt_load =
+    const elf_idx_t pt_load_idx =
         find_containing_mem_ptload(&elf->phdrs, new_addr, new_size);
-    if (pt_load == NULL) {
+    if (pt_load_idx == ELF_IDX_NULL) {
         pr_error("The provided new dynstr range "
                 "is not within any PT_LOAD segment\n");
         return 1;
     }
+    const Elf64_Phdr *const pt_load = get_phdr_ro(elf, pt_load_idx);
 
     Elf64_Dyn *dt_strtab = NULL, *dt_strsz = NULL;
     if (find_unique_dynamic_entry(&elf->dyn, DT_STRTAB, &dt_strtab) ||
@@ -316,14 +318,14 @@ int update_dynstr_range(struct elf *elf,
     dt_strsz->d_un.d_val = new_size;
     elf->dyn.entries.dirty = true;
 
-    elf->dyn.strtab_vaddr = new_addr;
-    elf->dyn.strtab_sz = new_size;
+    elf->dyn.strtab.vaddr = new_addr;
+    elf->dyn.strtab.size = new_size;
 
     const Elf64_Off new_off = pt_load->p_offset + (new_addr - pt_load->p_vaddr);
-    elf->dyn.strtab_off = new_off;
+    elf->dyn.strtab.off = new_off;
 
-    if (elf->dyn.strtab_shdr != ELF_IDX_NULL) {
-        Elf64_Shdr *const strtab_shdr = get_shdr_rw(elf, elf->dyn.strtab_shdr);
+    if (elf->dyn.strtab.shdr != ELF_IDX_NULL) {
+        Elf64_Shdr *const strtab_shdr = get_shdr_rw(elf, elf->dyn.strtab.shdr);
         strtab_shdr->sh_addr = new_addr;
         strtab_shdr->sh_offset = new_off;
         strtab_shdr->sh_size = new_size;
@@ -352,9 +354,9 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum)
 
     const Elf64_Xword new_dyn_tbl_size = new_dynnum * elf->dynentsize;
     if (find_containing_file_ptload(&elf->phdrs,
-                pt_dynamic->p_offset, new_dyn_tbl_size) == NULL ||
+                pt_dynamic->p_offset, new_dyn_tbl_size) == ELF_IDX_NULL ||
         find_containing_mem_ptload(&elf->phdrs,
-                pt_dynamic->p_vaddr, new_dyn_tbl_size) == NULL)
+                pt_dynamic->p_vaddr, new_dyn_tbl_size) == ELF_IDX_NULL)
     {
         pr_error("New DYNAMIC table is not contained in any PT_LOAD segment\n");
         return -1;
@@ -400,13 +402,14 @@ int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off)
 
     Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
 
-    const Elf64_Phdr *ptload = find_containing_file_ptload(&elf->phdrs,
+    const elf_idx_t ptload_idx = find_containing_file_ptload(&elf->phdrs,
             new_off, elf->dyn.entries.size);
-    if (ptload == NULL) {
+    if (ptload_idx == ELF_IDX_NULL) {
         pr_error("The given offset would make the dynamic table "
                  "not be contained within a PT_LOAD segment\n");
         return -1;
     }
+    const Elf64_Phdr *const ptload = get_phdr_ro(elf, ptload_idx);
 
     const Elf64_Off off_in_seg = new_off - ptload->p_offset;
     const Elf64_Addr new_vaddr = ptload->p_vaddr + off_in_seg;

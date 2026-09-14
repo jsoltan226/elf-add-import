@@ -25,6 +25,8 @@
 #define ELF_PRIMITIVE_FN_LIST                                           \
     DECL_ELF_PRIMITIVE_FN(Half, 16, 16, uint, UINT16, UINT16,           \
                           no_exclusive_64bit, same_size)                \
+    DECL_ELF_PRIMITIVE_FN(Section, 16, 16, uint, UINT16, UINT16,        \
+                          no_exclusive_64bit, same_size)                \
     DECL_ELF_PRIMITIVE_FN(Word, 32, 32, uint, UINT32, UINT16,           \
                           no_exclusive_64bit, same_size)                \
     DECL_ELF_PRIMITIVE_FN(Off, 32, 64, uint, UINT32, UINT64,            \
@@ -128,7 +130,7 @@ int write_ehdr(struct blob *data, uint64_t *off_p,
 
 /**
  * Parses a program header structure to the generic in-memory representation.
- * The fields' values are not validated to be sensible and spec-compliant.
+ * The fields' values are not validated to be sensible or spec-compliant.
  *
  * @param[in] data The data to read from. Must not be NULL.
  *
@@ -172,7 +174,7 @@ int write_phdr(struct blob *data, uint64_t *off_p,
 
 /**
  * Parses a section header structure to the generic in-memory representation.
- * The fields' values are not validated to be sensible and spec-compliant.
+ * The fields' values are not validated to be sensible or spec-compliant.
  *
  * @param[in] data The data to read from. Must not be NULL.
  *
@@ -216,7 +218,7 @@ int write_shdr(struct blob *data, uint64_t *off_p,
 
 /**
  * Parses a dynamic entry structure to the generic in-memory representation.
- * The fields' values are not validated to be sensible and spec-compliant.
+ * The fields' values are not validated to be sensible or spec-compliant.
  *
  * @param[in] data The data to read from. Must not be NULL.
  *
@@ -257,6 +259,51 @@ int read_dyn(const struct blob *data, uint64_t *off_p,
  */
 int write_dyn(struct blob *data, uint64_t *off_p,
               int clazz, int encoding, const Elf64_Dyn *dyn);
+
+/**
+ * Parses a symbol table entry to the generic in-memory representation.
+ * The fields' values are not validated to be sensible or spec-compliant.
+ *
+ * @param[in] data The data to read from. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
+ *
+ * @param[in] encoding The data encoding (endianness) of the ELF file
+ *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the data is outside of buffer bounds.
+ */
+int read_sym(const struct blob *data, uint64_t *off_p,
+             int clazz, int encoding, Elf64_Sym *out);
+
+/**
+ * Serializes a symbol table entry to the given class and data encoding.
+ *
+ * @param[out] data The data to write into. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to write.
+ *  This value will be incremented to point past the newly written data.
+ *  Must not be NULL.
+ *
+ * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
+ *
+ * @param[in] encoding The data encoding (endianness) of the ELF file
+ *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
+ *
+ * @param[in] sym The in-memory symbol struct to serialize. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
+ */
+int write_sym(struct blob *data, uint64_t *off_p,
+              int clazz, int encoding, const Elf64_Sym *sym);
+
 
 /**
  * Returns a string with the name of the ET_* ELF type

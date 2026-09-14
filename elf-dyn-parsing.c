@@ -35,9 +35,9 @@ static int find_validate_pt_dynamic(const struct elf_phdrs *phdrs,
  * validates it against the PT_DYNAMIC program header.
  * Part of `parse_dyn`.
  *
- * @param[in] shdrs The section header array. Must not be NULL.
+ * @param[in] shdrs The section headers array. Must not be NULL.
  *
- * @param[in] phdrs The program header array. Must not be NULL.
+ * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] pt_dynamic_idx The index of the previously checked PT_DYNAMIC
  *  program header, against which the found SHT_DYNAMIC shdr is to be validated.
@@ -140,9 +140,11 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
                                      Elf64_Xword size, elf_idx_t *out);
 
 /**
- * Parses the legacy DT_HASH symbol lookup table structure.
+ * Finds and parses the DT_HASH structure -
+ * the legacy dynamic symbol lookup hash table.
+ * Part of `parse_dyn`.
  *
- * @param[in] data The ELF file data. Must not be NULL.
+ * @param[in] data The ELF file's data. Must not be NULL.
  *
  * @param[in] clazz The ELF file's class.
  *
@@ -154,10 +156,12 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
  *
  * @param[in] entries The dynamic entries array. Must not be NULL.
  *
- * @param[in] sht_dynsym_idx The index of the SHT_DYNSYM section header,
- *  if present (otherwise `ELF_IDX_NULL`).
+ * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
  *
- * @param[out] out Output pointer. Must not be NULL.
+ * @param[out] out Output pointer (see the definition of `struct elf_dt_hash`).
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
  */
 static int parse_dt_hash(
         const struct blob *data, int clazz, int encoding,
@@ -165,6 +169,99 @@ static int parse_dt_hash(
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
         struct elf_dt_hash *out
 );
+
+/**
+ * Finds the DT_HASH dynamic entry and using that,
+ * locates and validates the bounds of the DT_HASH table structure.
+ * Part of `parse_dt_hash`.
+ *
+ * Initializes the `struct elf_dt_hash`.
+ * The following fields are populated with validated values:
+ *  - `vaddr, off, total_size`,
+ *  - `hdr.nbucket, hdr.nchain`,
+ * The following fields are initialized to empty values:
+ *  - `buckets` (array), `chains` (array),
+ *  - `shdr` (shdr table index).
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in] entries The dynamic entries array. Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int find_dt_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
+        struct elf_dt_hash *out
+);
+
+/**
+ * Based on the data from `find_dt_hash`, reads and validates the contents
+ * of the DT_HASH `buckets` and `chains` arrays.
+ * Part of `parse_dt_hash`.
+ *
+ * All temporary resources are freed in case of failure.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[in] hdr The DT_HASH header containing the number of entries
+ *  in `buckets` and `chains`. Must not be NULL.
+ *
+ * @param[in] end The byte right after the end of the whole structure,
+ *  i. e. the offset + size. Used to validate the value of `*off_p`
+ *  after reading.
+ *
+ * @param[out] out_buckets Output pointer for the buckets array.
+ *  On success, will contain `hdr->nbucket` entries. Must not be NULL.
+ *
+ * @param[out] out_chains Output pointer for the chains array.
+ *  On success, will contain `hdr->nchain` entries. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_dt_hash_contents(
+        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
+        Elf32_Word **out_buckets, Elf32_Word **out_chains
+);
+
+/**
+ * Tries to find a `SHT_HASH` section header and validates it if present.
+ * Part of `parse_dt_hash`.
+ *
+ * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] dt_hash The DT_HASH data previously populated by
+ *  `find_dt_hash` and `read_dt_hash_contents`.
+ *
+ * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
+ *
+ * @param[out] out Output pointer for the found SHT_HASH section header's index,
+ *  or `ELF_IDX_NULL` if nothing is found. Must not be NULL.
+ *
+ * @return 0 on success (either nothing or a valid shdr is found),
+ *  non-zero on failure (an invalid shdr is found).
+ */
+static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
+                                       const struct elf_dt_hash *dt_hash,
+                                       elf_idx_t sht_dynsym_idx,
+                                       elf_idx_t *out);
 
 int parse_dyn(
         const struct blob *data, int clazz, int encoding,
@@ -544,6 +641,48 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
     return ret;
 }
 
+static int parse_dt_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_hash *out
+)
+{
+    *out = (struct elf_dt_hash) { 0 };
+    if (find_dt_hash(data, clazz, encoding, phdrs, entries, out))
+        goto err; /* error already printed */
+
+    uint64_t off = out->off;
+    /* `find_dt_hash` already checks that
+     * `dt_hash.off + dt_hash.total_size` doesn't overflow */
+    const uint64_t end = off + out->total_size;
+    if (read_dt_hash_contents(data, clazz, encoding, &off, &out->hdr, end,
+                              &out->buckets, &out->chains))
+    {
+        pr_error("Failed to read the DT_HASH table contents\n");
+        goto err;
+    }
+
+    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, &out->shdr)) {
+        pr_error("Invalid SHT_HASH section\n");
+        goto err;
+    }
+
+    pr_debug("DT_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 "\n",
+             out->hdr.nbucket, out->hdr.nchain);
+
+    return 0;
+
+err:
+    if (out->buckets != NULL)
+        free(out->buckets);
+    if (out->chains != NULL)
+        free(out->chains);
+
+    memset(out, 0, sizeof(struct elf_dt_hash));
+    return 1;
+}
+
 static int find_dt_hash(
         const struct blob *data, int clazz, int encoding,
         const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
@@ -753,48 +892,6 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
     if (!ret)
         *out = idx;
     return ret;
-}
-
-static int parse_dt_hash(
-        const struct blob *data, int clazz, int encoding,
-        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
-        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
-        struct elf_dt_hash *out
-)
-{
-    *out = (struct elf_dt_hash) { 0 };
-    if (find_dt_hash(data, clazz, encoding, phdrs, entries, out))
-        goto err; /* error already printed */
-
-    uint64_t off = out->off;
-    /* `find_dt_hash` already checks that
-     * `dt_hash.off + dt_hash.total_size` doesn't overflow */
-    const uint64_t end = off + out->total_size;
-    if (read_dt_hash_contents(data, clazz, encoding, &off, &out->hdr, end,
-                              &out->buckets, &out->chains))
-    {
-        pr_error("Failed to read the DT_HASH table contents\n");
-        goto err;
-    }
-
-    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, &out->shdr)) {
-        pr_error("Invalid SHT_HASH section\n");
-        goto err;
-    }
-
-    pr_debug("DT_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 "\n",
-             out->hdr.nbucket, out->hdr.nchain);
-
-    return 0;
-
-err:
-    if (out->buckets != NULL)
-        free(out->buckets);
-    if (out->chains != NULL)
-        free(out->chains);
-
-    memset(out, 0, sizeof(struct elf_dt_hash));
-    return 1;
 }
 
 int parse_dynsym(const struct blob *data, int clazz, int encoding,

@@ -140,9 +140,9 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
                                      Elf64_Xword size, elf_idx_t *out);
 
 /**
- * Finds and parses the DT_HASH structure -
- * the legacy dynamic symbol lookup hash table.
- * Part of `parse_dyn`.
+ * Finds and parses the DT_HASH structure - the legacy dynamic symbol lookup
+ * hash table. For the modern DT_GNU_HASH, see `parse_dt_gnu_hash`.
+ * Part of `parse_dynsym`.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
@@ -157,6 +157,7 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
  * @param[in] entries The dynamic entries array. Must not be NULL.
  *
  * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
+ *  Set to `ELF_IDX_NULL` otherwise.
  *
  * @param[out] out Output pointer (see the definition of `struct elf_dt_hash`).
  *  Must not be NULL.
@@ -177,11 +178,11 @@ static int parse_dt_hash(
  *
  * Initializes the `struct elf_dt_hash`.
  * The following fields are populated with validated values:
- *  - `vaddr, off, total_size`,
- *  - `hdr.nbucket, hdr.nchain`,
+ *  - vaddr, off, total_size, dyn_entry,
+ *  - hdr.nbucket, hdr.nchain,
  * The following fields are initialized to empty values:
- *  - `buckets` (array), `chains` (array),
- *  - `shdr` (shdr table index).
+ *  - buckets (array), chain (array) - NULL,
+ *  - shdr (shdr table index) - ELF_IDX_NULL.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
@@ -205,7 +206,7 @@ static int find_dt_hash(
 
 /**
  * Based on the data from `find_dt_hash`, reads and validates the contents
- * of the DT_HASH `buckets` and `chains` arrays.
+ * of the DT_HASH `buckets` and `chain` arrays.
  * Part of `parse_dt_hash`.
  *
  * All temporary resources are freed in case of failure.
@@ -221,7 +222,7 @@ static int find_dt_hash(
  *  Must not be NULL.
  *
  * @param[in] hdr The DT_HASH header containing the number of entries
- *  in `buckets` and `chains`. Must not be NULL.
+ *  in `buckets` and `chain`. Must not be NULL.
  *
  * @param[in] end The byte right after the end of the whole structure,
  *  i. e. the offset + size. Used to validate the value of `*off_p`
@@ -230,7 +231,7 @@ static int find_dt_hash(
  * @param[out] out_buckets Output pointer for the buckets array.
  *  On success, will contain `hdr->nbucket` entries. Must not be NULL.
  *
- * @param[out] out_chains Output pointer for the chains array.
+ * @param[out] out_chain Output pointer for the chain array.
  *  On success, will contain `hdr->nchain` entries. Must not be NULL.
  *
  * @return 0 on success, non-zero on failure.
@@ -238,12 +239,15 @@ static int find_dt_hash(
 static int read_dt_hash_contents(
         const struct blob *data, int clazz, int encoding, uint64_t *off_p,
         const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
-        Elf32_Word **out_buckets, Elf32_Word **out_chains
+        Elf32_Word **out_buckets, Elf32_Word **out_chain
 );
 
 /**
  * Tries to find a `SHT_HASH` section header and validates it if present.
  * Part of `parse_dt_hash`.
+ *
+ * Also validates that the SHT_DYNSYM table size matches the value
+ * derived from the DT_HASH data.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
  *
@@ -251,17 +255,265 @@ static int read_dt_hash_contents(
  *  `find_dt_hash` and `read_dt_hash_contents`.
  *
  * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
+ *  Set to `ELF_IDX_NULL` otherwise.
  *
- * @param[out] out Output pointer for the found SHT_HASH section header's index,
- *  or `ELF_IDX_NULL` if nothing is found. Must not be NULL.
+ * @param[in] clazz Class of the ELF file.
+ *
+ * @param[out] out Output pointer for the found SHT_HASH section header's index
+ *  (a reference into `shdrs`), or `ELF_IDX_NULL` if nothing is found.
+ *  Must not be NULL.
  *
  * @return 0 on success (either nothing or a valid shdr is found),
  *  non-zero on failure (an invalid shdr is found).
  */
 static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
                                        const struct elf_dt_hash *dt_hash,
-                                       elf_idx_t sht_dynsym_idx,
+                                       elf_idx_t sht_dynsym_idx, int clazz,
                                        elf_idx_t *out);
+
+/**
+ * Parses the DT_GNU_HASH structure - the modern dynamic symbol lookup
+ * hash table. For the legacy DT_HASH, see `parse_dt_hash`.
+ * Part of `parse_dynsym`.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] entries The dynamic entries array. Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
+ *  Set to `ELF_IDX_NULL` otherwise.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int parse_dt_gnu_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_gnu_hash *out
+);
+
+/**
+ * Reads the DT_GNU_HASH structure's header,
+ * also validating that the `nbuckets` and `bloom_size` fields
+ * are representable as `size_t` (they are later used in allocations).
+ * Part of `find_dt_gnu_hash`.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ */
+static int read_dt_gnu_hash_hdr(
+        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        struct elf_dt_gnu_hash_hdr *out
+);
+
+/**
+ * Finds the `DT_GNU_HASH` dynamic entry and based on it,
+ * locates and parses the GNU hash structure header, validating
+ * that it fits within its PT_LOAD segment's file range and address space.
+ * Part of `parse_dt_gnu_hash`.
+ *
+ * The following fields of `struct elf_dt_hash` are parsed:
+ *  - vaddr, off
+ *  - dyn_entry,
+ *  - hdr,
+ *  - bloomentsize
+ * The rest are initialized to default values:
+ *  - bloom (array), buckets (array), chain (array) - NULL,
+ *  - nchain, total_size - 0,
+ *  - shdr (shdr table index) - ELF_IDX_NULL
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in] entries The dynamic entries array. Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @param[out] out_pt_load_idx Output pointer for the index of the PT_LOAD
+ *  segment that contains the GNU hash header (a reference into `phdrs`).
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int find_dt_gnu_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
+        struct elf_dt_gnu_hash *out, elf_idx_t *out_pt_load_idx
+);
+
+/**
+ * Based on the information from the GNU hash structure
+ * header (`find_dt_gnu_hash`), parses the bloom filter and buckets array.
+ * Part of `parse_dt_gnu_hash`.
+ *
+ * The following fields in `struct elf_dt_gnu_hash` are read:
+ *  - off, vaddr,
+ *  - hdr,
+ *  - bloomentsize
+ * The following fields are populated:
+ *  - buckets (array),
+ *  - bloom (array)
+ *
+ * The rest of the fields are unused.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in,out] ctx The DT_GNU_HASH structure context.
+ *  See the details of this function's description for info
+ *  on which fields are used and written to. Must not be NULL.
+ *
+ * @param[in] pt_load_idx The index of the PT_LOAD segment that contains
+ *  the GNU hash structure. Must be the one obtained from `find_dt_gnu_hash`.
+ *
+ * @param[out] out_max_bucket Output pointer for the highest value
+ *  in the `buckets` array. This is used in later steps; computed here
+ *  for convenience since we're parsing the buckets array anyways.
+ *  Must not be NULL.
+ *
+ * @param[out] out_chain_off Output pointer for the offset of the `chain`
+ *  array. This is also used in later steps and similarly; computed here
+ *  for convenience. This value will points past the read `bloom` and `buckets`
+ *  arrays. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_bloom_and_buckets(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, struct elf_dt_gnu_hash *ctx,
+        elf_idx_t pt_load_idx, Elf32_Word *out_max_bucket,
+        Elf64_Off *out_chain_off
+);
+
+/**
+ * Based on the information from the GNU hash header and buckets array,
+ * locates and traverses the chain array to find its length.
+ * Part of `parse_dt_gnu_hash`.
+ *
+ * The traversal is bounds-checked against the PT_LOAD segment
+ * that contains the rest of the GNU hash structure.
+ * Due to the... questionable way the spec is written (not specifying
+ * the length of this array in the header), the value obtained from this
+ * function can only really be finally trusted after trying to look up
+ * every symbol that the hash table indexes.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] phdrs The program headers array. Must not be NULL.
+ *
+ * @param[in] containing_phdr_idx The index of the PT_LOAD segment that contains
+ *  the GNU hash structure. Must be the one obtained from `find_dt_gnu_hash`.
+ *
+ * @param[in] ctx The GNU hash structure data, populated by
+ *  `find_dt_gnu_hash` and `read_bloom_and_buckets`. Must not be NULL.
+ *
+ * @param[in] max_bucket The highest value in the `buckets` array.
+ *  Must be the value obtained from `read_bloom_and_buckets`.
+ *
+ * @param[in] chain_off Offset of the chain array.
+ *  Must be the value obtained from `read_bloom_and_buckets`.
+ *
+ * @param[out] out Output pointer for the found number of chain array entries.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the chain array doesn't terminate properly
+ *  before reaching the segment bounds.
+ */
+static int find_gnu_hash_nchain(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, elf_idx_t containing_phdr_idx,
+        const struct elf_dt_gnu_hash *ctx, Elf32_Word max_bucket,
+        Elf64_Off chain_off, Elf32_Word *out
+);
+
+/**
+ * Reads the GNU hash `chain` array.
+ * Part of `parse_dt_gnu_hash`.
+ *
+ * @param[in] data The ELF file's data. Must not be NULL.
+ *
+ * @param[in] clazz The ELF file's class.
+ *
+ * @param[in] encoding The ELF file's byte order.
+ *
+ * @param[in] chain_off Offset of the chain array (at which to start reading).
+ *  Must be the value obtained from `read_bloom_and_buckets`.
+ *
+ * @param[in] nchain The number of entries to read.
+ *  Must be the value obtained from `find_gnu_hash_nchain`.
+ *
+ * @param[out] out Output pointer for the read chain array of `nchain` entries.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_gnu_hash_chain(
+        const struct blob *data, int clazz, int encoding,
+        Elf64_Off chain_off, Elf32_Word nchain, Elf32_Word **out
+);
+
+/**
+ * Tries to find a `SHT_GNU_HASH` section header and validates it if present.
+ * Part of `parse_dt_gnu_hash`.
+ *
+ * Also validates that the SHT_DYNSYM table size matches the value
+ * derived from the DT_GNU_HASH data.
+ *
+ * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] ctx The DT_GNU_HASH data previously populated by
+ *  `find_dt_hash`, `read_bloom_and_buckets` and `read_gnu_hash_chain`.
+ *  Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
+ *  Set to `ELF_IDX_NULL` otherwise.
+ *
+ * @param[in] clazz Class of the ELF file.
+ *
+ * @param[out] out_sht_gnu_hash_idx Output pointer for the found SHT_GNU_HASH
+ *  section header's index (a reference into `shdrs`),
+ *  or `ELF_IDX_NULL` if nothing is found. Must not be NULL.
+ *
+ * @return 0 on success (either nothing or a valid shdr is found),
+ *  non-zero on failure (an invalid shdr is found).
+ */
+static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
+                                           const struct elf_shdrs *shdrs,
+                                           elf_idx_t sht_dynsym_idx, int clazz,
+                                           elf_idx_t *out_sht_gnu_hash_idx);
 
 int parse_dyn(
         const struct blob *data, int clazz, int encoding,
@@ -641,6 +893,38 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
     return ret;
 }
 
+static int find_ptload_and_off_from_vaddr(Elf64_Addr vaddr, Elf64_Xword size,
+                                          const struct elf_phdrs *phdrs,
+                                          Elf64_Off *out_off,
+                                          elf_idx_t *out_pt_load_idx)
+{
+    *out_off = 0;
+    *out_pt_load_idx = ELF_IDX_NULL;
+
+    const elf_idx_t ptload_idx = find_containing_mem_ptload(phdrs, vaddr, size);
+    if (ptload_idx == ELF_IDX_NULL) {
+        pr_error("Given range not inside any PT_LOAD segment\n");
+        return 1;
+    }
+    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
+
+    const Elf64_Off off_in_load_seg = vaddr - ptload->p_vaddr;
+    if (off_in_load_seg > UINT64_MAX - ptload->p_offset) {
+        pr_error("Offset in load segment too large (integer overflow)\n");
+        return 1;
+    }
+    const Elf64_Off off = ptload->p_offset + off_in_load_seg;
+
+    if (find_containing_file_ptload(phdrs, off, size) != ptload_idx) {
+        pr_error("Given range not file-backed by its PT_LOAD segment\n");
+        return 1;
+    }
+
+    *out_off = off;
+    *out_pt_load_idx = ptload_idx;
+    return 0;
+}
+
 static int parse_dt_hash(
         const struct blob *data, int clazz, int encoding,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
@@ -657,13 +941,15 @@ static int parse_dt_hash(
      * `dt_hash.off + dt_hash.total_size` doesn't overflow */
     const uint64_t end = off + out->total_size;
     if (read_dt_hash_contents(data, clazz, encoding, &off, &out->hdr, end,
-                              &out->buckets, &out->chains))
+                              &out->buckets, &out->chain))
     {
         pr_error("Failed to read the DT_HASH table contents\n");
         goto err;
     }
 
-    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, &out->shdr)) {
+    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, clazz,
+                                    &out->shdr))
+    {
         pr_error("Invalid SHT_HASH section\n");
         goto err;
     }
@@ -676,8 +962,8 @@ static int parse_dt_hash(
 err:
     if (out->buckets != NULL)
         free(out->buckets);
-    if (out->chains != NULL)
-        free(out->chains);
+    if (out->chain != NULL)
+        free(out->chain);
 
     memset(out, 0, sizeof(struct elf_dt_hash));
     return 1;
@@ -689,42 +975,34 @@ static int find_dt_hash(
         struct elf_dt_hash *out
 )
 {
+    *out = (struct elf_dt_hash) { 0 };
+    out->dyn_entry = ELF_IDX_NULL;
+    out->shdr = ELF_IDX_NULL;
+
+    /* Find the vaddr, file offset and containing PT_LOAD */
     elf_idx_t dt_hash_idx = ELF_IDX_NULL;
     if (find_unique_dyn_entries(entries, 1,
                 (Elf64_Sxword[]) { DT_HASH }, &dt_hash_idx))
     {
-        pr_debug("Duplicate or missing DT_HASH entry\n");
+        pr_debug("Missing or duplicate DT_HASH entry\n");
         return 1;
     }
     const Elf64_Addr dt_hash_vaddr = entries->arr[dt_hash_idx].d_un.d_ptr;
 
-    /* same across both classes */
-    struct elf_dt_hash_hdr hdr = { 0 };
-
-    const elf_idx_t pt_load_idx =
-        find_containing_mem_ptload(phdrs, dt_hash_vaddr, DT_HASH_HDR_SIZE);
-    if (pt_load_idx == ELF_IDX_NULL) {
-        pr_error("DT_HASH table header not inside any PT_LOAD segment\n");
-        return 1;
-    }
-    const Elf64_Phdr *const pt_load = &phdrs->arr[pt_load_idx];
-
-    const Elf64_Off off_in_load_seg = dt_hash_vaddr - pt_load->p_vaddr;
-    if (off_in_load_seg > UINT64_MAX - pt_load->p_offset) {
-        pr_error("DT_HASH offset in load segment too large "
-                "(integer overflow)\n");
-        return 1;
-    }
-    const Elf64_Off dt_hash_off = pt_load->p_offset + off_in_load_seg;
-
-    if (find_containing_file_ptload(phdrs, dt_hash_off, DT_HASH_HDR_SIZE)
-            != pt_load_idx)
+    Elf64_Off dt_hash_off = 0;
+    elf_idx_t pt_load_idx = ELF_IDX_NULL;
+    /* we will later validate that this segment contains the entire structure
+     * and not just the header, but we must first read the header to determine
+     * the total size of the table. */
+    if (find_ptload_and_off_from_vaddr(dt_hash_vaddr, DT_HASH_HDR_SIZE, phdrs,
+                                       &dt_hash_off, &pt_load_idx))
     {
-        pr_error("DT_HASH header isn't file-backed by its PT_LOAD segment\n");
+        pr_error("No PT_LOAD segment properly contains the DT_HASH header\n");
         return 1;
     }
 
-    /* read the header */
+    /* Read the header */
+    struct elf_dt_hash_hdr hdr = { 0 }; /* same across both classes */
     uint64_t off = dt_hash_off;
     if (read_Word(data, &off, clazz, encoding, &hdr.nbucket) ||
         read_Word(data, &off, clazz, encoding, &hdr.nchain) ||
@@ -748,44 +1026,51 @@ static int find_dt_hash(
 
     /* none of this can ever overflow a uint64_t */
     const uint64_t buckets_total_size = hdr.nbucket * sizeof(Elf32_Word);
-    const uint64_t chains_total_size = hdr.nchain * sizeof(Elf32_Word);
+    const uint64_t chain_total_size = hdr.nchain * sizeof(Elf32_Word);
     const Elf64_Xword dt_hash_total_size =
-            DT_HASH_HDR_SIZE + buckets_total_size + chains_total_size;
+            DT_HASH_HDR_SIZE + buckets_total_size + chain_total_size;
 
-    if (find_containing_file_ptload(phdrs, dt_hash_off, dt_hash_total_size) !=
-            pt_load_idx)
+    /* Now validate that the entire table is in the PT_LOAD,
+     * not just the header */
     {
-        pr_error("DT_HASH size and/or offset invalid\n");
-        return 1;
+        Elf64_Off tmp_off = 0;
+        elf_idx_t tmp_idx = ELF_IDX_NULL;
+        if (find_ptload_and_off_from_vaddr(dt_hash_vaddr, dt_hash_total_size,
+                                           phdrs, &tmp_off, &tmp_idx) ||
+                tmp_off != dt_hash_off ||
+                tmp_idx != pt_load_idx)
+        {
+            pr_error("The found PT_LOAD segment doesn't properly contain "
+                    "the entire DT_HASH structure\n");
+            return 1;
+        }
     }
 
     out->hdr = hdr;
     out->vaddr = dt_hash_vaddr;
     out->off = dt_hash_off;
+    out->dyn_entry = dt_hash_idx;
     out->total_size = dt_hash_total_size;
-
-    out->buckets = NULL; out->chains = NULL;
-    out->shdr = ELF_IDX_NULL;
     return 0;
 }
 
 static int read_dt_hash_contents(
         const struct blob *data, int clazz, int encoding, uint64_t *off_p,
         const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
-        Elf32_Word **out_buckets, Elf32_Word **out_chains
+        Elf32_Word **out_buckets, Elf32_Word **out_chain
 )
 {
     /* the above `find_dt_hash` already validates that both
      * `hdr->nbucket` and `hdr->nchain` are representable as size_t */
     int ret = 1;
-    Elf32_Word *buckets = NULL, *chains = NULL;
+    Elf32_Word *buckets = NULL, *chain = NULL;
     if ((buckets = calloc((size_t)hdr->nbucket, sizeof(Elf32_Word)))
             == NULL)
     {
         pr_error("Failed to allocate the DT_HASH bucket array\n");
         goto err;
     }
-    if ((chains = calloc((size_t)hdr->nchain, sizeof(Elf32_Word))) == NULL) {
+    if ((chain = calloc((size_t)hdr->nchain, sizeof(Elf32_Word))) == NULL) {
         pr_error("Failed to allocate the DT_HASH chain array\n");
         goto err;
     }
@@ -805,11 +1090,11 @@ static int read_dt_hash_contents(
     }
 
     for (Elf32_Word i = 0; i < hdr->nchain; i++) {
-        if (read_Word(data, off_p, clazz, encoding, &chains[i])) {
+        if (read_Word(data, off_p, clazz, encoding, &chain[i])) {
             pr_error("Failed to read DT_HASH chain no %" PRIu32 "\n", i);
             goto err;
         }
-        if (chains[i] >= hdr->nchain) {
+        if (chain[i] >= hdr->nchain) {
             pr_error("Invalid DT_HASH chain no %" PRIu32 "\n", i);
             goto err;
         }
@@ -827,15 +1112,15 @@ static int read_dt_hash_contents(
 err:
     if (!ret) {
         *out_buckets = buckets; buckets = NULL;
-        *out_chains = chains; chains = NULL;
+        *out_chain = chain; chain = NULL;
     } else {
         if (buckets != NULL) {
             free(buckets);
             buckets = NULL;
         }
-        if (chains != NULL) {
-            free(chains);
-            chains = NULL;
+        if (chain != NULL) {
+            free(chain);
+            chain = NULL;
         }
     }
 
@@ -844,22 +1129,32 @@ err:
 
 static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
                                        const struct elf_dt_hash *dt_hash,
-                                       elf_idx_t sht_dynsym_idx,
+                                       elf_idx_t sht_dynsym_idx, int clazz,
                                        elf_idx_t *out)
 {
     *out = ELF_IDX_NULL;
-    elf_idx_t idx = ELF_IDX_NULL;
+    elf_idx_t sht_hash_idx = ELF_IDX_NULL;
+    /* `read_validate_shdrs` guarantees that
+     * there aren't multiple `SHT_HASH` sections */
     for (Elf64_Xword i = 0; i < shdrs->num; i++) {
         if (shdrs->arr[i].sh_type == SHT_HASH) {
-            idx = i;
+            sht_hash_idx = i;
             break;
         }
     }
-    if (idx == ELF_IDX_NULL)
+    if (sht_hash_idx == ELF_IDX_NULL && sht_dynsym_idx == ELF_IDX_NULL) {
+        pr_debug("%s: No SHT_DYNSYM or SHT_HASH section headers\n",
+                __func__);
         return 0;
+    } else if (sht_hash_idx == ELF_IDX_NULL || sht_dynsym_idx == ELF_IDX_NULL) {
+        pr_error("One of SHT_DYNSYM and SHT_HASH sections is present "
+                 "while the other one is missing\n");
+        return 1;
+    }
 
     int ret = 0;
-    const Elf64_Shdr *const sht_hash = &shdrs->arr[idx];
+    const Elf64_Shdr *const sht_hash = &shdrs->arr[sht_hash_idx];
+    const Elf64_Shdr *const sht_dynsym = &shdrs->arr[sht_dynsym_idx];
 
     if (sht_hash->sh_addr != dt_hash->vaddr) {
         pr_error("Invalid SHT_HASH vaddr\n");
@@ -871,6 +1166,17 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
     }
     if (sht_hash->sh_size != dt_hash->total_size) {
         pr_error("Invalid SHT_HASH size\n");
+        ret = 1;
+    }
+
+    const size_t symentsize = clazz == ELFCLASS32 ?
+        sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
+    const Elf64_Xword total_symtab_size =
+        (Elf64_Xword)dt_hash->hdr.nchain * symentsize;
+    if (total_symtab_size != sht_dynsym->sh_size) {
+        pr_error("%s: Calculated dynamic symbol table size (0x%" PRIx64 ") "
+                 "doesn't match the dynsym section header (0x%" PRIx64 ")\n",
+                 __func__, total_symtab_size, sht_dynsym->sh_size);
         ret = 1;
     }
 
@@ -890,7 +1196,463 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
         pr_error("WARNING: SHT_HASH sh_entsize != sizeof(Elf32_Word)\n");
 
     if (!ret)
-        *out = idx;
+        *out = sht_hash_idx;
+    return ret;
+}
+
+static int parse_dt_gnu_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_gnu_hash *out
+)
+{
+    *out = (struct elf_dt_gnu_hash) { 0 };
+
+    elf_idx_t ptload = ELF_IDX_NULL;
+    if (find_dt_gnu_hash(data, clazz, encoding, phdrs, entries, out, &ptload)) {
+        /* error already printed */
+        goto err;
+    }
+
+    Elf32_Word max_bucket = 0;
+    Elf64_Off chain_off = 0;
+    if (read_bloom_and_buckets(data, clazz, encoding, phdrs,
+                               out, ptload, &max_bucket, &chain_off))
+    {
+        pr_error("Failed to read the DT_GNU_HASH bloom filter and buckets\n");
+        goto err;
+    }
+
+    if (find_gnu_hash_nchain(data, clazz, encoding, phdrs,
+                             ptload, out, max_bucket, chain_off, &out->nchain))
+    {
+        pr_error("Couldn't find the number of entries in the GNU hash chain\n");
+        goto err;
+    }
+
+    if (read_gnu_hash_chain(data, clazz, encoding, chain_off, out->nchain,
+                            &out->chain))
+    {
+        pr_error("Failed to read the GNU hash chain\n");
+        goto err;
+    }
+
+    /* max value: (16 + 8 + 4 + 4) * 2^32; doesn't overflow a uint64 */
+    out->total_size = (Elf64_Xword)DT_GNU_HASH_HDR_SIZE +
+                        (out->bloomentsize * out->hdr.bloom_size) +
+                        (sizeof(Elf32_Word) * out->hdr.nbuckets) +
+                        (sizeof(Elf32_Word) * out->nchain);
+    {
+        Elf64_Off tmp_off = 0;
+        elf_idx_t tmp_ptload = ELF_IDX_NULL;
+        if (find_ptload_and_off_from_vaddr(out->vaddr, out->total_size, phdrs,
+                    &tmp_off, &tmp_ptload) ||
+                tmp_off != out->off || tmp_ptload != ptload)
+        {
+            pr_error("DT_GNU_HASH contents not contained in the found "
+                     "PT_LOAD segment\n");
+            goto err;
+        }
+    }
+
+    if (validate_sht_gnu_hash_if_exists(out, shdrs, sht_dynsym_idx, clazz,
+                                        &out->shdr))
+    {
+        pr_error("GNU hash section data mismatch\n");
+        goto err;
+    }
+
+    pr_debug("DT_GNU_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 ", "
+             "symoffset: %" PRIu32 "\n",
+             out->hdr.nbuckets, out->nchain, out->hdr.symoffset);
+
+    return 0;
+
+err:
+    if (out->chain != NULL) {
+        free(out->chain);
+        out->chain = NULL;
+    }
+    if (out->buckets != NULL) {
+        free(out->buckets);
+        out->buckets = NULL;
+    }
+    if (out->bloom != NULL) {
+        free(out->bloom);
+        out->bloom = NULL;
+    }
+    return 1;
+}
+
+static int read_dt_gnu_hash_hdr(
+        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        struct elf_dt_gnu_hash_hdr *out
+)
+{
+    const uint64_t start_off = *off_p;
+    if (start_off > UINT64_MAX - DT_GNU_HASH_HDR_SIZE)
+        return -1;
+    const uint64_t end = start_off + DT_GNU_HASH_HDR_SIZE;
+
+    /* same across both classes */
+    if (read_Word(data, off_p, clazz, encoding, &out->nbuckets) ||
+        read_Word(data, off_p, clazz, encoding, &out->symoffset) ||
+        read_Word(data, off_p, clazz, encoding, &out->bloom_size) ||
+        read_Word(data, off_p, clazz, encoding, &out->bloom_shift))
+    {
+        return 1;
+    }
+    if (*off_p != end)
+        return 1;
+
+    if (((size_t)out->nbuckets != out->nbuckets) ||
+        ((size_t)out->bloom_size != out->bloom_size))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int find_dt_gnu_hash(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
+        struct elf_dt_gnu_hash *out, elf_idx_t *out_pt_load_idx
+)
+{
+    *out = (struct elf_dt_gnu_hash) { 0 };
+    out->shdr = ELF_IDX_NULL;
+    out->dyn_entry = ELF_IDX_NULL;
+    *out_pt_load_idx = ELF_IDX_NULL;
+
+    /* Find the DT_GNU_HASH vaddr, file offset and containing PT_LOAD */
+    elf_idx_t dt_gnu_hash_idx = ELF_IDX_NULL;
+    if (find_unique_dyn_entries(entries, 1,
+                (const Elf64_Sxword[]) { DT_GNU_HASH }, &dt_gnu_hash_idx))
+    {
+        pr_debug("Missing or duplicate DT_GNU_HASH entry\n");
+        return 1;
+    }
+    const Elf64_Addr vaddr = entries->arr[dt_gnu_hash_idx].d_un.d_ptr;
+
+    Elf64_Off dt_gnu_hash_off = 0;
+    elf_idx_t pt_load_idx = ELF_IDX_NULL;
+    /* as with DT_HASH, we must first read the header to determine the size
+     * of the whole DT_GNU_HASH, which is validated later  */
+    if (find_ptload_and_off_from_vaddr(vaddr, DT_GNU_HASH_HDR_SIZE, phdrs,
+                                       &dt_gnu_hash_off, &pt_load_idx))
+    {
+        pr_error("No PT_LOAD segment properly contains "
+                "the DT_GNU_HASH header\n");
+        return 1;
+    }
+
+    /* Read the header */
+    uint64_t off = dt_gnu_hash_off;
+    struct elf_dt_gnu_hash_hdr hdr = { 0 };
+    if (read_dt_gnu_hash_hdr(data, clazz, encoding, &off, &hdr)) {
+        pr_error("Failed to read the DT_GNU_HASH header\n");
+        return 1;
+    }
+
+    if (hdr.bloom_size == 0) {
+        pr_error("Bloom filter size cannot be zero\n");
+        return 1;
+    }
+
+    out->hdr = hdr;
+    out->off = dt_gnu_hash_off;
+    out->vaddr = vaddr;
+    out->dyn_entry = dt_gnu_hash_idx;
+    out->bloomentsize = clazz == ELFCLASS32 ?
+        sizeof(Elf32_Word) : sizeof(Elf64_Xword);
+    *out_pt_load_idx = pt_load_idx;
+
+    return 0;
+}
+
+static int read_bloom_and_buckets(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, struct elf_dt_gnu_hash *ctx,
+        elf_idx_t pt_load_idx, Elf32_Word *out_max_bucket,
+        Elf64_Off *out_chain_off
+)
+{
+    Elf64_Xword *bloom = NULL;
+    Elf32_Word *buckets = NULL;
+
+    /* Overflow safety established by `read_dt_gnu_hash_hdr` */
+    const uint64_t bloom_off = ctx->off + DT_GNU_HASH_HDR_SIZE;
+    const uint64_t bloom_total_size = ctx->hdr.bloom_size * ctx->bloomentsize;
+    if (bloom_off > UINT64_MAX - bloom_total_size) {
+        pr_error("Bloom filter size too large (integer overflow)\n");
+        goto err;
+    }
+
+    const uint64_t buckets_off = bloom_off + bloom_total_size;
+    const uint64_t buckets_total_size = ctx->hdr.nbuckets * sizeof(Elf32_Word);
+    if (buckets_off > UINT64_MAX - buckets_total_size) {
+        pr_error("Buckets size too large (integer overflow)\n");
+        goto err;
+    }
+    const uint64_t chain_off = buckets_off + buckets_total_size;
+
+    /* Check that the bloom filter and buckets array are contained
+     * in the same PT_LOAD segment as the header */
+    {
+        uint64_t tmp_off = 0;
+        elf_idx_t tmp_pt_load_idx = ELF_IDX_NULL;
+        /* 16 + 2^32 + 2^32 doesn't overflow a uint64_t */
+        const uint64_t size =
+            DT_GNU_HASH_HDR_SIZE + bloom_total_size + buckets_total_size;
+        if (find_ptload_and_off_from_vaddr(ctx->vaddr, size, phdrs,
+                                           &tmp_off, &tmp_pt_load_idx) ||
+                tmp_off != ctx->off ||
+                tmp_pt_load_idx != pt_load_idx)
+        {
+            pr_error("DT_GNU_HASH header, bloom filter and buckets "
+                     "not file-backed by the found PT_LOAD segment\n");
+            goto err;
+        }
+    }
+
+    /* Read the bloom filter */
+    /* bloom_size is guaranteed to be non-zero by `find_dt_gnu_hash` */
+    bloom = calloc(ctx->hdr.bloom_size, sizeof(Elf64_Xword));
+    if (bloom == NULL) {
+        pr_error("Failed to allocate the bloom filter array\n");
+        goto err;
+    }
+    uint64_t off = bloom_off;
+    for (Elf32_Word i = 0; i < ctx->hdr.bloom_size; i++) {
+        /* glibc uses `ElfXX_Addr` for this too, lol */
+        if (read_Addr(data, &off, clazz, encoding, &bloom[i])) {
+            pr_error("Failed to read bloom filter entry no %" PRIu32 "\n", i);
+            goto err;
+        }
+    }
+    if (off != buckets_off) {
+        pr_error("Incorrect number of bytes read for the bloom filter\n");
+        goto err;
+    }
+
+    /* Read the buckets; this time `nbuckets` can theoretically be 0 */
+    Elf32_Word max_bucket = 0;
+    if (ctx->hdr.nbuckets > 0) {
+        buckets = calloc(ctx->hdr.nbuckets, sizeof(Elf32_Word));
+        if (buckets == NULL) {
+            pr_error("Failed to allocate the buckets array\n");
+            goto err;
+        }
+        uint64_t off = buckets_off;
+        for (Elf32_Word i = 0; i < ctx->hdr.nbuckets; i++) {
+            if (read_Word(data, &off, clazz, encoding, &buckets[i])) {
+                pr_error("Failed to read bucket no %" PRIu32 "\n", i);
+                goto err;
+            }
+            if (buckets[i] < ctx->hdr.symoffset && buckets[i] != 0) {
+                pr_error("DT_GNU_HASH bucket %" PRIu32 " (%" PRIu32 ") "
+                         "refers to symbol below symoffset\n", i, buckets[i]);
+                goto err;
+            }
+
+            if (buckets[i] > max_bucket)
+                max_bucket = buckets[i];
+        }
+        if (off != buckets_off + buckets_total_size) {
+            pr_error("Incorrect number of bytes read for the buckets array\n");
+            goto err;
+        }
+    }
+
+    ctx->buckets = buckets; buckets = NULL;
+    ctx->bloom = bloom; bloom = NULL;
+    *out_max_bucket = max_bucket;
+    *out_chain_off = chain_off;
+    return 0;
+
+err:
+    if (buckets != NULL) {
+        free(buckets);
+        buckets = NULL;
+    }
+    if (bloom != NULL) {
+        free(bloom);
+        bloom = NULL;
+    }
+    return 1;
+}
+
+static int find_gnu_hash_nchain(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, elf_idx_t containing_phdr_idx,
+        const struct elf_dt_gnu_hash *ctx, Elf32_Word max_bucket,
+        Elf64_Off chain_off, Elf32_Word *out
+)
+{
+    if (max_bucket == 0) {
+        pr_debug("%s: No hashed symbols\n", __func__);
+        *out = 0;
+        return 0;
+    } else if (max_bucket < ctx->hdr.symoffset) {
+        pr_error("Invalid max bucket value\n");
+        return 1;
+    }
+    const Elf32_Word start_idx = max_bucket - ctx->hdr.symoffset;
+
+    /* never overflows */
+    const Elf64_Xword min_chain_size =
+        ((Elf64_Xword)start_idx + 1) * sizeof(Elf32_Word);
+
+    const Elf64_Phdr *const containing_phdr = &phdrs->arr[containing_phdr_idx];
+    /* it's assumed that every entry in `phdrs` has already been validated */
+    const Elf64_Off seg_end =
+        containing_phdr->p_offset + containing_phdr->p_filesz;
+
+    if (seg_end < sizeof(Elf32_Word) ||
+        seg_end < chain_off ||
+        min_chain_size > seg_end - chain_off)
+    {
+        pr_error("GNU hash chain doesn't fit in its PT_LOAD segment\n");
+        return 1;
+    }
+
+    uint64_t idx = (uint64_t)start_idx;
+    uint64_t off = chain_off + ((uint64_t)start_idx * sizeof(Elf32_Word));
+    while (true) {
+        if (off > seg_end - sizeof(Elf32_Word)) {
+            pr_error("GNU hash chain doesn't fit in its PT_LOAD segment "
+                     "(no terminator found)\n");
+            return 1;
+        }
+
+        Elf32_Word c = 0;
+        if (read_Word(data, &off, clazz, encoding, &c)) {
+            pr_error("Failed to read chain entry no %" PRIu64 "\n", idx);
+            return 1;
+        }
+        if (c & UINT32_C(1))
+            break;
+
+        if (idx == (uint64_t)UINT32_MAX) {
+            pr_error("Chain entry index too large (integer overflow)\n");
+            return 1;
+        }
+        idx++;
+    }
+
+    if (idx >= (uint64_t)UINT32_MAX) {
+        pr_error("Chain entry index too large (integer overflow)\n");
+        return 1;
+    }
+    *out = (Elf32_Word)(idx + 1);
+    return 0;
+}
+
+static int read_gnu_hash_chain(
+        const struct blob *data, int clazz, int encoding,
+        Elf64_Off chain_off, Elf32_Word nchain, Elf32_Word **out
+)
+{
+    Elf32_Word *chain = NULL;
+
+    if (nchain == 0) {
+        pr_debug("%s: No chain entries\n", __func__);
+        *out = NULL;
+        return 0;
+    }
+
+    chain = calloc(nchain, sizeof(Elf32_Word));
+    if (chain == NULL) {
+        pr_error("Failed to allocate the hash chain array\n");
+        goto err;
+    }
+
+    uint64_t off = chain_off;
+    for (Elf32_Word i = 0; i < nchain; i++) {
+        if (read_Word(data, &off, clazz, encoding, &chain[i])) {
+            pr_error("Failed to read hash chain entry no %" PRIu32 "\n", i);
+            goto err;
+        }
+    }
+
+    *out = chain;
+    return 0;
+
+err:
+    if (chain != NULL) {
+        free(chain);
+        chain = NULL;
+    }
+    *out = NULL;
+    return 1;
+}
+
+static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
+                                           const struct elf_shdrs *shdrs,
+                                           elf_idx_t sht_dynsym_idx, int clazz,
+                                           elf_idx_t *out_sht_gnu_hash_idx)
+{
+    *out_sht_gnu_hash_idx = ELF_IDX_NULL;
+    elf_idx_t sht_gnu_hash_idx = ELF_IDX_NULL;
+    /* `read_validate_shdrs` guarantees that
+     * there aren't multiple `SHT_GNU_HASH` sections */
+    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
+        if (shdrs->arr[i].sh_type == SHT_GNU_HASH) {
+            sht_gnu_hash_idx = i;
+            break;
+        }
+    }
+    if (sht_gnu_hash_idx == ELF_IDX_NULL && sht_dynsym_idx == ELF_IDX_NULL) {
+        pr_debug("%s: No SHT_DYNSYM or SHT_GNU_HASH section headers\n",
+                __func__);
+        return 0;
+    } else if (sht_gnu_hash_idx == ELF_IDX_NULL ||
+               sht_dynsym_idx == ELF_IDX_NULL)
+    {
+        pr_error("One of SHT_DYNSYM and SHT_GNU_HASH sections is present "
+                 "while the other one is missing\n");
+        return 1;
+    }
+    const Elf64_Shdr *const sht_dynsym = &shdrs->arr[sht_dynsym_idx];
+    const Elf64_Shdr *const sht_gnu_hash = &shdrs->arr[sht_gnu_hash_idx];
+
+    int ret = 0;
+
+    if (sht_gnu_hash->sh_addr != ctx->vaddr) {
+        pr_error("Invalid SHT_GNU_HASH vaddr\n");
+        ret = 1;
+    }
+    if (sht_gnu_hash->sh_offset != ctx->off) {
+        pr_error("Invalid SHT_GNU_HASH offset\n");
+        ret = 1;
+    }
+    if (ctx->total_size != sht_gnu_hash->sh_size) {
+        pr_error("GNU hash calculated size (0x%" PRIx64 ") doesn't match "
+                 "the section header (0x%" PRIx64 ")\n",
+                 ctx->total_size, sht_gnu_hash->sh_size);
+        ret = 1;
+    }
+
+    const size_t symentsize = clazz == ELFCLASS32 ?
+        sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
+    const Elf64_Xword total_symtab_size =
+        ((Elf64_Xword)ctx->hdr.symoffset + ctx->nchain) * symentsize;
+    if (total_symtab_size != sht_dynsym->sh_size) {
+        pr_error("Calculated dynamic symbol table size (0x%" PRIx64 ") "
+                 "doesn't match the dynsym section header (0x%" PRIx64 ")\n",
+                 total_symtab_size, sht_dynsym->sh_size);
+        ret = 1;
+    }
+
+    if (sht_gnu_hash->sh_link != sht_dynsym_idx) {
+        pr_error("SHT_GNU_HASH sh_link doesn't point to the dynsym section\n");
+        ret = 1;
+    }
+
+    if (!ret)
+        *out_sht_gnu_hash_idx = sht_gnu_hash_idx;
     return ret;
 }
 
@@ -930,6 +1692,8 @@ int parse_dynsym(const struct blob *data, int clazz, int encoding,
             break;
         }
     }
+
+    Elf64_Xword nsyms_dt_hash = 0;
     struct elf_dt_hash dt_hash = { 0 };
     if (parse_dt_hash(data, clazz, encoding, phdrs, shdrs,
                       entries, sht_dynsym_idx, &dt_hash))
@@ -937,9 +1701,28 @@ int parse_dynsym(const struct blob *data, int clazz, int encoding,
         pr_error("Failed to parse DT_HASH\n");
         return 1;
     }
-    free(dt_hash.chains);
+    nsyms_dt_hash = dt_hash.hdr.nchain;
+    free(dt_hash.chain);
     free(dt_hash.buckets);
     dt_hash = (struct elf_dt_hash) { 0 };
+
+    Elf64_Xword nsyms_dt_gnu_hash = 0;
+    struct elf_dt_gnu_hash dt_gnu_hash = { 0 };
+    if (parse_dt_gnu_hash(data, clazz, encoding, phdrs, shdrs,
+                          entries, sht_dynsym_idx, &dt_gnu_hash))
+    {
+        pr_error("Failed to parse DT_GNU_HASH\n");
+        return 1;
+    }
+    nsyms_dt_gnu_hash =
+        (Elf64_Xword)dt_gnu_hash.hdr.symoffset + dt_gnu_hash.nchain;
+    free(dt_gnu_hash.chain);
+    free(dt_gnu_hash.buckets);
+    free(dt_gnu_hash.bloom);
+    dt_gnu_hash = (struct elf_dt_gnu_hash) { 0 };
+
+    printf("nsyms: DT_HASH: %" PRIu64 ", DT_GNU_HASH: %" PRIu64 "\n",
+            nsyms_dt_hash, nsyms_dt_gnu_hash);
 
     return 0;
 }

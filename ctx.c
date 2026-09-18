@@ -101,8 +101,17 @@ void destroy_elf(struct elf *elf)
     if (elf->dyn.hash.buckets != NULL)
         free(elf->dyn.hash.buckets);
 
-    if (elf->dyn.hash.chains != NULL)
-        free(elf->dyn.hash.chains);
+    if (elf->dyn.hash.chain != NULL)
+        free(elf->dyn.hash.chain);
+
+    if (elf->dyn.gnu_hash.bloom != NULL)
+        free(elf->dyn.gnu_hash.bloom);
+
+    if (elf->dyn.gnu_hash.buckets != NULL)
+        free(elf->dyn.gnu_hash.buckets);
+
+    if (elf->dyn.gnu_hash.chain != NULL)
+        free(elf->dyn.gnu_hash.chain);
 
     memset(elf, 0, sizeof(struct elf));
 }

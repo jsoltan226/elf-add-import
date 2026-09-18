@@ -272,6 +272,12 @@ struct elf {
             /** Total file size of the hash table header and contents. */
             Elf64_Xword total_size;
 
+            /**
+             * Index of the DT_HASH dynamic entry;
+             * a reference into `entries`.
+             */
+            elf_idx_t dyn_entry;
+
 #define DT_HASH_HDR_SIZE (2 * sizeof(Elf32_Word))
             /**
              * @struct Header of the DT_HASH table structure.
@@ -286,14 +292,14 @@ struct elf {
              *  /  ...                  /
              *  |                       |
              *  |-----------------------|
-             *  | chains: u32[nchain]   |
+             *  | chain: u32[nchain]    |
              *  /  ...                  /
              *  |                       |
              *  =========================
              */
             struct elf_dt_hash_hdr {
                 Elf32_Word nbucket; /**< Number of entries in `buckets`. */
-                Elf32_Word nchain; /**< Number of entries in `chains`. */
+                Elf32_Word nchain; /**< Number of entries in `chain`. */
             } hdr; /**< Header of the DT_HASH table structure. */
 
             /**
@@ -307,14 +313,14 @@ struct elf {
             /**
              * Array of symbol table indices forming the collision chains.
              *
-             * For a symbol index `i`, `chains[i]` gives the next symbol index
+             * For a symbol index `i`, `chain[i]` gives the next symbol index
              * in the same hash bucket. A value of `STN_UNDEF`
              * terminates the chain.
              *
              * The length of this array equals the number of entries
              * in the associated dynamic symbol table.
              */
-            Elf32_Word *chains;
+            Elf32_Word *chain;
 
             /**
              * Index of the ".hash" SHT_HASH section header, if present;
@@ -322,6 +328,37 @@ struct elf {
              */
             elf_idx_t shdr;
         } hash; /**< Data related to the legacy DT_HASH symbol lookup table. */
+
+        struct elf_dt_gnu_hash {
+            Elf64_Addr vaddr;
+            Elf64_Off off;
+
+            /**
+             * Index of the DT_GNU_HASH dynamic entry;
+             * a reference into `entries`.
+             */
+            elf_idx_t dyn_entry;
+
+#define DT_GNU_HASH_HDR_SIZE (4 * sizeof(Elf32_Word))
+            struct elf_dt_gnu_hash_hdr {
+                Elf32_Word nbuckets;
+                Elf32_Word symoffset;
+                Elf32_Word bloom_size;
+                Elf32_Word bloom_shift;
+            } hdr;
+
+            size_t bloomentsize;
+
+            Elf64_Xword *bloom;
+            Elf32_Word *buckets;
+            Elf32_Word *chain;
+
+            Elf32_Word nchain;
+
+            Elf64_Xword total_size;
+
+            elf_idx_t shdr;
+        } gnu_hash;
 
         /** @struct Data related to the dynamic symbol table (`.dynsym`). */
         struct elf_dyn_symtab {

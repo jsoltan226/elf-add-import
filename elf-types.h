@@ -12,43 +12,49 @@
 
 /** PRIMITIVE TYPES **/
 
-/* Whether the type only has an ELF64 variant
- * (e.g. Elf64_Xword; Elf32_Xword doesn't exist) */
-#define exclusive_64bit
-#define no_exclusive_64bit
+/**
+ * Whether the type only has an ELF64 variant
+ * (e.g. Elf64_Xword; Elf32_Xword doesn't exist)
+ */
+/* #define elf_64BIT_EXCLUSIVE */
+/* #define elf_BOTH_CLASSES */
 
-/* Whether the underlying type for both the ELF32 and ELF64 variants
- * is the same (e.g. Elf64_Half and Elf32_Half are both uint16_t) */
-#define same_size
-#define different_size
+/** Whether the underlying type is signed (e.g. Elf64_Sword) */
+/* #define elf_SIGNED */
+/* #define elf_UNSIGNED */
 
-#define ELF_PRIMITIVE_FN_LIST                                           \
-    DECL_ELF_PRIMITIVE_FN(Half, 16, 16, uint, UINT16, UINT16,           \
-                          no_exclusive_64bit, same_size)                \
-    DECL_ELF_PRIMITIVE_FN(Section, 16, 16, uint, UINT16, UINT16,        \
-                          no_exclusive_64bit, same_size)                \
-    DECL_ELF_PRIMITIVE_FN(Word, 32, 32, uint, UINT32, UINT16,           \
-                          no_exclusive_64bit, same_size)                \
-    DECL_ELF_PRIMITIVE_FN(Off, 32, 64, uint, UINT32, UINT64,            \
-                          no_exclusive_64bit, different_size)           \
-    DECL_ELF_PRIMITIVE_FN(Addr, 32, 64, uint, UINT32, UINT64,           \
-                          no_exclusive_64bit, different_size)           \
-    DECL_ELF_PRIMITIVE_FN(Xword, 64, 64, uint, UINT64, UINT64,          \
-                          exclusive_64bit, same_size)                   \
-                                                                        \
-    /** WARNING: for signed types there's no automatic checking         \
-     ** for underflow of the Elf32 version of the type **/              \
-                                                                        \
-    DECL_ELF_PRIMITIVE_FN(Sword, 32, 32, int, INT32, INT32,             \
-                          no_exclusive_64bit, same_size)                \
-    DECL_ELF_PRIMITIVE_FN(Sxword, 64, 64, int, INT64, INT64,            \
-                          exclusive_64bit, same_size)                   \
+/**
+ * Whether the underlying types have the same size
+ * (e.g. (Elf32_Half == Elf64_Half but Elf32_Addr != Elf64_Addr)
+ */
+/* #define elf_SAME_SIZE */
+/* #define elf_DIFFERENT_SIZE */
+
+#define ELF_PRIMITIVE_LIST \
+    /* (name, bits32, bits64, exclusive64, signed, same_size */                \
+    DECL_ELF_PRIMITIVE(Half, 16, 16,                                           \
+                       elf_BOTH_CLASSES, elf_UNSIGNED, elf_SAME_SIZE)          \
+    DECL_ELF_PRIMITIVE(Section, 16, 16,                                        \
+                       elf_BOTH_CLASSES, elf_UNSIGNED, elf_SAME_SIZE)          \
+    DECL_ELF_PRIMITIVE(Word, 32, 32,                                           \
+                       elf_BOTH_CLASSES, elf_UNSIGNED, elf_SAME_SIZE)          \
+    DECL_ELF_PRIMITIVE(Off, 32, 64,                                            \
+                       elf_BOTH_CLASSES, elf_UNSIGNED, elf_DIFFERENT_SIZE)     \
+    DECL_ELF_PRIMITIVE(Addr, 32, 64,                                           \
+                       elf_BOTH_CLASSES, elf_UNSIGNED, elf_DIFFERENT_SIZE)     \
+                                                                               \
+    DECL_ELF_PRIMITIVE(Xword, 64, 64,                                          \
+                       elf_64BIT_EXCLUSIVE, elf_UNSIGNED, elf_SAME_SIZE)       \
+                                                                               \
+    DECL_ELF_PRIMITIVE(Sword, 32, 32,                                          \
+                       elf_BOTH_CLASSES, elf_SIGNED, elf_SAME_SIZE)            \
+    DECL_ELF_PRIMITIVE(Sxword, 64, 64,                                         \
+                       elf_64BIT_EXCLUSIVE, elf_SIGNED, elf_SAME_SIZE)         \
 
 
-#define DECL_ELF_PRIMITIVE_FN(elf_type, bits32, bits64,                 \
-                              t_prefix, prefix32, prefix64,             \
-                              exclusive_64__, same_size__)              \
-                                                                        \
+#define DECL_ELF_PRIMITIVE(name, bits32, bits64,                               \
+                           exclusive64, signedness, same_size)                 \
+                                                                               \
 /**                                                                            \
  * Parses an ELF primitive type to the generic in-memory representation.       \
  *                                                                             \
@@ -67,10 +73,10 @@
  *                                                                             \
  * @return 0 on success, non-zero if the data is outside of buffer bounds.     \
  */                                                                            \
-int read_##elf_type(const struct blob *data, uint64_t *off_p,           \
-                    int clazz, int encoding,                            \
-                    Elf64_##elf_type *out);                             \
-                                                                        \
+int read_##name(const struct blob *data, uint64_t *off_p,                      \
+                int clazz, int encoding,                                       \
+                Elf64_##name *out);                                            \
+                                                                               \
 /**                                                                            \
  * Serializes an ELF primitive type to the given class and data encoding.      \
  *                                                                             \
@@ -90,17 +96,14 @@ int read_##elf_type(const struct blob *data, uint64_t *off_p,           \
  * @return 0 on success, non-zero if the serialized `val` can't fit in `data`  \
  *  or `clazz` is `ELFCLASS32` and `val` overflows the Elf32 equivalent type.  \
  */                                                                            \
-int write_##elf_type(struct blob *data, uint64_t *off_p,                \
-                     int clazz, int endianness,                         \
-                     Elf64_##elf_type val);                             \
+int write_##name(struct blob *data, uint64_t *off_p,                           \
+                 int clazz, int encoding,                                      \
+                 Elf64_##name val);                                            \
 
-ELF_PRIMITIVE_FN_LIST
+ELF_PRIMITIVE_LIST
 
-#undef DECL_ELF_PRIMITIVE_FN
-#undef exclusive_64bit
-#undef no_exclusive_64bit
-#undef same_size
-#undef different_size
+#undef DECL_ELF_PRIMITIVE
+
 
 /** ELF STRUCTURES **/
 

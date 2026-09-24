@@ -98,6 +98,9 @@ void destroy_elf(struct elf *elf)
     if (elf->dyn.entries.arr != NULL)
         free(elf->dyn.entries.arr);
 
+    if (elf->dyn.symtab.syms != NULL)
+        free(elf->dyn.symtab.syms);
+
     if (elf->dyn.hash.buckets != NULL)
         free(elf->dyn.hash.buckets);
 
@@ -112,6 +115,9 @@ void destroy_elf(struct elf *elf)
 
     if (elf->dyn.gnu_hash.chain != NULL)
         free(elf->dyn.gnu_hash.chain);
+
+    if (elf->dyn.symtab_shndx.arr != NULL)
+        free(elf->dyn.symtab_shndx.arr);
 
     memset(elf, 0, sizeof(struct elf));
 }

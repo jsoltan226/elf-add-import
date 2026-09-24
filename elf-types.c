@@ -2,9 +2,9 @@
 #include "elf.h"
 #include "util.h"
 #include "portable-endian.h"
-#include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -38,263 +38,201 @@ static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out);
  */
 static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val);
 
-/**
- * Before you start reading this monstrosity,
- * here is the roughly equivalent C++ pseudocode:
- *
- * template<typename Elf_type,
- *          typename UnderlyingType32, typename UnderlyingType64,
- *          bool SameSize, bool ExclusiveTo64>
- * int read(const struct blob *data, uint64_t *off_p,
- *          int clazz, int endianness, Elf_type *out)
- * {
- *     if constexpr (SameSize) {
- *         //// `same_size_read__` ////
- *         (void) clazz;
- *         goto /constexpr/ whatever_read64__;
- *     } else {
- *         //// `different_size_read__` ////
- *         if (clazz == ELFCLASS32) {
- *             if constexpr (ExclusiveTo64) {
- *                 //// `exclusive_64bit_read32__` ////
- *                 // Error: This type is not valid for ELF32
- *                 return 1;
- *             } else {
- *                 //// `no_exclusive_64bit_read32__` ////
- *                 if (overflow_safe_cmp(*off_p + sizeof(Elf_type) >
- *                                       data->size))
- *                 {
- *                     // Error: Not enough data
- *                     return 1;
- *                 }
- *
- *                 UnderlyingType32 tmp =
- *                     *(const UnderlyingType32 *)(data->data + *off_p);
- *                 if (endianness == ELFDATA2MSB) {
- *                     *out = (Elf_type)from_be(tmp);
- *                 } else // if (endianness == ELFDATA2MSB) // {
- *                     *out = (Elf_type)from_le(tmp);
- *                 }
- *             }
- *
- *         } else // if (clazz == ELFCLASS64) // {
- * whatever_read64__:
- *             //// `whatever_read64__` ////
- *             if (overflow_safe_cmp(*off_p + sizeof(Elf_type) > data->size)) {
- *                 // Error: Not enough data
- *                 return 1;
- *             }
- *
- *             UnderlyingType64 tmp =
- *                 *(const UnderlyingType64 *)(data->data + *off_p);
- *             if (endianness == ELFDATA2MSB) {
- *                 *out = (Elf_type)from_be(tmp);
- *             } else // if (endianness == ELFDATA2MSB) // {
- *                 *out = (Elf_type)from_le(tmp);
- *             }
- *         }
- *     }
- * }
- *
- * This structure also applies to the later `write` variants.
- */
+static int read_generic(const struct blob *data, uint64_t *off_p,
+                        uint64_t n, uint8_t out[static n],
+                        int encoding, const char *fnname)
+{
+#ifndef pr_error
+    (void) fnname;
+#endif /* pr_error */
 
-/* Below lies the reason why C++ was created */
+    if (n > data->size || *off_p > data->size - n) {
+        pr_error("%s: ([0x%" PRIx64 "]) Read of size %" PRIu64 " "
+                 "would overflow data buffer (%" PRIu64 ")\n",
+                 fnname, *off_p, n, data->size);
+        return 1;
+    } else if (*off_p > UINT64_MAX - n) {
+        pr_error("%s: ([0x%" PRIx64 "]) Read of size %" PRIu64 " "
+                 "would overflow the 64-bit integer limit\n",
+                 fnname, *off_p, n);
+        return 1;
+    }
 
-#define exclusive_64bit_read32__(elf_type, bits32, bits64,                     \
-                                 t_prefix, prefix32, prefix64)                 \
-        pr_error("%s: This type is not valid for ELF32\n", __func__);          \
-        return -1;                                                             \
+    const bool swap_needed =
+        (BYTE_ORDER == LITTLE_ENDIAN) != (encoding == ELFDATA2LSB);
+    if (swap_needed) {
+        for (uint64_t i = 0; i < n; i++)
+            out[i] = data->data[*off_p + n - i - 1];
+    } else {
+        memcpy(out, data->data + *off_p, n);
+    }
 
-#define no_exclusive_64bit_read32__(elf_type, bits32, bits64,                  \
-                                    t_prefix, prefix32, prefix64)              \
+    *off_p += n;
+    return 0;
+}
+
+static int write_generic(struct blob *data, uint64_t *off_p,
+                         uint64_t n, const uint8_t val[static n],
+                         int encoding, const char *fnname)
+{
+#ifndef pr_error
+    (void) fnname;
+#endif /* pr_error */
+
+    if (n > data->size || *off_p > data->size - n) {
+        pr_error("%s: ([0x%" PRIx64 "]) Write of size %" PRIu64 " "
+                 "would overflow data buffer (%" PRIu64 ")\n",
+                 fnname, *off_p, n, data->size);
+        return 1;
+    } else if (*off_p > UINT64_MAX - n) {
+        pr_error("%s: ([0x%" PRIx64 "]) Write of size %" PRIu64 " "
+                 "would overflow the 64-bit integer limit\n",
+                 fnname, *off_p, n);
+        return 1;
+    }
+
+    const bool swap_needed =
+        (BYTE_ORDER == LITTLE_ENDIAN) != (encoding == ELFDATA2LSB);
+    if (swap_needed) {
+        for (uint64_t i = 0; i < n; i++)
+            data->data[*off_p + n - i - 1] = val[i];
+    } else {
+        memcpy(data->data + *off_p, val, n);
+    }
+
+    *off_p += n;
+    return 0;
+}
+
+static inline int64_t decode_s64(uint64_t u)
+{
+    if (u <= INT64_MAX)
+        return (int64_t)u;
+
+    uint64_t magnitude = UINT64_MAX - u + UINT64_C(1);
+
+    if (magnitude == UINT64_C(1) << 63)
+        return INT64_MIN;
+
+    return -(int64_t)magnitude;
+}
+
+static inline int32_t decode_s32(uint32_t u)
+{
+    if (u <= INT32_MAX)
+        return (int32_t)u;
+
+    uint32_t magnitude = UINT32_MAX - u + UINT32_C(1);
+
+    if (magnitude == UINT32_C(1) << 31)
+        return INT32_MIN;
+
+    return -(int32_t)magnitude;
+}
+
+#define elf_64BIT_EXCLUSIVE_32bit_check do {                                \
+    pr_error("%s: This type is not supported for ELFCLASS32\n", __func__);  \
+    return 1;                                                               \
+} while (0)
+
+#define elf_BOTH_CLASSES_32bit_check (void)0
+
+#define elf_SIGNED_read_conv(bits) decode_s##bits(tmp)
+#define elf_UNSIGNED_read_conv(bits) tmp
+
+#define DECL_ELF_PRIMITIVE(name, bits32, bits64,                               \
+                           exclusive64, signedness, same_size)                 \
                                                                                \
-        if (data->size < sizeof(Elf32_##elf_type) ||                           \
-                data->size - sizeof(Elf32_##elf_type) < *off_p)                \
-        {                                                                      \
-            pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n",                \
-                     __func__, *off_p);                                        \
-            return 1;                                                          \
-        }                                                                      \
-                                                                               \
-        Elf32_##elf_type tmp;                                                  \
-        memcpy(&tmp, data->data + *off_p, sizeof(Elf32_##elf_type));           \
-        *off_p += sizeof(Elf32_##elf_type);                                    \
-                                                                               \
-        if (endianness == ELFDATA2MSB) {                                       \
-            *out = (Elf32_##elf_type) be##bits32##toh(tmp);                    \
-        } else /* if (endianness == ELFDATA2LSB) */ {                          \
-            *out = (Elf32_##elf_type) le##bits32##toh(tmp);                    \
-        }                                                                      \
-
-#define whatever_read64__(elf_type, bits32, bits64,                            \
-                          t_prefix, prefix32, prefix64)                        \
-        if (data->size < sizeof(Elf64_##elf_type) ||                           \
-                data->size - sizeof(Elf64_##elf_type) < *off_p)                \
-        {                                                                      \
-            pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n",                \
-                    __func__, *off_p);                                         \
-            return 1;                                                          \
-        }                                                                      \
-                                                                               \
-        uint##bits64##_t tmp = 0;                                              \
-        memcpy(&tmp, data->data + *off_p, sizeof(Elf64_##elf_type));           \
-        *off_p += sizeof(Elf64_##elf_type);                                    \
-                                                                               \
-        if (endianness == ELFDATA2MSB) {                                       \
-            tmp = be##bits64##toh(tmp);                                        \
-        } else /* if (endianness == ELFDATA2LSB) */ {                          \
-            tmp = le##bits64##toh(tmp);                                        \
-        }                                                                      \
-        memcpy(out, &tmp, sizeof(tmp));                                        \
-
-#define different_size_read__(elf_type, bits32, bits64, t_prefix,              \
-                              prefix32, prefix64, disable_if_exclusive_64)     \
-    if (clazz == ELFCLASS32) {                                                 \
-        disable_if_exclusive_64##_read32__(elf_type, bits32, bits64,           \
-                                           t_prefix, prefix32, prefix64);      \
-    } else /* if (clazz == ELFCLASS64) */ {                                    \
-        whatever_read64__(elf_type, bits32, bits64,                            \
-                          t_prefix, prefix32, prefix64);                       \
-    }                                                                          \
-
-#define same_size_read__(elf_type, bits32, bits64, t_prefix,                   \
-                         prefix32, prefix64, disable_if_exclusive_64)          \
-    (void) clazz;                                                              \
-    /* Reuse the 64-bit case for the generic variant */                        \
-    whatever_read64__(elf_type, bits32, bits64, t_prefix, prefix32, prefix64); \
-
-
-#define DECL_ELF_PRIMITIVE_FN(elf_type, bits32, bits64,                        \
-                              t_prefix, prefix32, prefix64,                    \
-                              disable_if_exclusive_64, is_same_size)           \
-                                                                               \
-int read_##elf_type(const struct blob *data, uint64_t *off_p,                  \
-                    int clazz, int endianness,                                 \
-                    Elf64_##elf_type *out)                                     \
+int read_##name(const struct blob *data, uint64_t *off_p,                      \
+                int clazz, int encoding,                                       \
+                Elf64_##name *out)                                             \
 {                                                                              \
-    is_same_size##_read__(elf_type, bits32, bits64, t_prefix,                  \
-                          prefix32, prefix64, disable_if_exclusive_64);        \
-    return 0;                                                                  \
+    if (clazz == ELFCLASS32) {                                                 \
+        { exclusive64##_32bit_check; }                                         \
+                                                                               \
+        uint##bits32##_t tmp;                                                  \
+        if (read_generic(data, off_p, bits32 / 8, (uint8_t *)&tmp, encoding,   \
+                         __func__))                                            \
+            return 1;                                                          \
+                                                                               \
+        *out = (Elf64_##name) signedness##_read_conv(bits32);                  \
+        return 0;                                                              \
+    } else /* if (clazz == ELFCLASS64) */ {                                    \
+        uint##bits64##_t tmp;                                                  \
+        if (read_generic(data, off_p, bits64 / 8, (uint8_t *)&tmp, encoding,   \
+                         __func__))                                            \
+            return 1;                                                          \
+                                                                               \
+        *out = signedness##_read_conv(bits64);                                 \
+        return 0;                                                              \
+    }                                                                          \
 }                                                                              \
 
-ELF_PRIMITIVE_FN_LIST
+ELF_PRIMITIVE_LIST
 
-#undef DECL_ELF_PRIMITIVE_FN
-#undef same_size_read__
-#undef different_size_read__
-#undef whatever_read64__
-#undef no_exclusive_64bit_read32__
-#undef exclusive_64bit_read32__
+#undef DECL_ELF_PRIMITIVE
+#undef elf_SIGNED_read_conv
+#undef elf_UNSIGNED_read_conv
 
 
-/**
- * See the comments above the `read` macros for an explanation of this... thing
- */
-
-#define exclusive_64bit_write32__(elf_type, bits32, bits64,                    \
-                                  t_prefix, prefix32, prefix64)                \
-        pr_error("%s: This type is not valid for ELF32\n", __func__);          \
-        return -1;                                                             \
-
-#define no_exclusive_64bit_write32__(elf_type, bits32, bits64,                 \
-                                     t_prefix, prefix32, prefix64)             \
-        if (data->size < sizeof(Elf32_##elf_type) ||                           \
-                data->size - sizeof(Elf32_##elf_type) < *off_p)                \
-        {                                                                      \
-            pr_error("%s: ([0x%" PRIx64 "]) Not enough space in data buffer\n",\
-                    __func__, *off_p);                                         \
-            return 1;                                                          \
-        }                                                                      \
-                                                                               \
-        if (val > prefix32##_MAX) {                                            \
-            pr_error("%s: ([0x%" PRIx64 "]) Value 0x%" PRIx##bits64            \
-                    " too large for the ELF32 version of the type\n",          \
-                    __func__, *off_p, val);                                    \
-            return 1;                                                          \
-        }                                                                      \
-                                                                               \
-        uint##bits64##_t tmp = 0;                                              \
-        memcpy(&tmp, &val, sizeof(tmp));                                       \
-        if (endianness == ELFDATA2MSB) {                                       \
-            memcpy(data->data + *off_p,                                        \
-                   &(uint##bits32##_t){ htobe##bits32((uint##bits32##_t)tmp) },\
-                   sizeof(uint##bits32##_t)                                    \
-            );                                                                 \
-        } else /* if (endianness == ELFDATA2LSB) */ {                          \
-            memcpy(data->data + *off_p,                                        \
-                   &(uint##bits32##_t){ htole##bits32((uint##bits32##_t)tmp) },\
-                   sizeof(uint##bits32##_t)                                    \
-            );                                                                 \
-        }                                                                      \
-                                                                               \
-        *off_p += sizeof(Elf32_##elf_type);                                    \
-
-#define whatever_write64__(elf_type, bits32, bits64,                           \
-                           t_prefix, prefix32, prefix64)                       \
-        if (data->size < sizeof(Elf64_##elf_type) ||                           \
-                data->size - sizeof(Elf64_##elf_type) < *off_p)                \
-        {                                                                      \
-            pr_error("%s: ([0x%" PRIx64 "]) Not enough space in data buffer\n",\
-                    __func__, *off_p);                                         \
-            return 1;                                                          \
-        }                                                                      \
-                                                                               \
-        uint##bits64##_t tmp = 0;                                              \
-        memcpy(&tmp, &val, sizeof(tmp));                                       \
-        if (endianness == ELFDATA2MSB) {                                       \
-            memcpy(data->data + *off_p,                                        \
-                   &(uint##bits64##_t){ htobe##bits64((uint##bits64##_t)tmp) },\
-                   sizeof(uint##bits64##_t)                                    \
-            );                                                                 \
-        } else /* if (endianness == ELFDATA2LSB) */ {                          \
-            memcpy(data->data + *off_p,                                        \
-                   &(uint##bits64##_t){ htole##bits64((uint##bits64##_t)tmp) },\
-                   sizeof(uint##bits64##_t)                                    \
-            );                                                                 \
-        }                                                                      \
-                                                                               \
-        *off_p += sizeof(Elf64_##elf_type);                                    \
-
-#define same_size_write__(elf_type, bits32, bits64, t_prefix,                  \
-                          prefix32, prefix64, disable_if_exclusive_64)         \
-    (void) clazz;                                                              \
-    /* Reuse the 64-bit case for the generic variant */                        \
-    whatever_write64__(elf_type, bits32, bits64, t_prefix, prefix32, prefix64);\
-
-#define different_size_write__(elf_type, bits32, bits64, t_prefix,             \
-                               prefix32, prefix64, disable_if_exclusive_64)    \
-    if (clazz == ELFCLASS32) {                                                 \
-                                                                               \
-        disable_if_exclusive_64##_write32__(elf_type, bits32, bits64,          \
-                                            t_prefix, prefix32, prefix64);     \
-                                                                               \
-    } else /* if (clazz == ELFCLASS64) */ {                                    \
-        whatever_write64__(elf_type, bits32, bits64,                           \
-                           t_prefix, prefix32, prefix64);                      \
+#define elf_SIGNED_32bit_write_limit_check(bits32, bits64, is_same_size) do {  \
+    if (val < INT##bits32##_MIN || val > INT##bits32##_MAX) {                  \
+        pr_error("%s: Value %" PRIi##bits64 " not within limits "              \
+                 "of the 32-bit type\n", __func__, val);                       \
+        return 1;                                                              \
     }                                                                          \
+} while (0)
 
-#define DECL_ELF_PRIMITIVE_FN(elf_type, bits32, bits64,                        \
-                              t_prefix, prefix32, prefix64,                    \
-                              disable_if_exclusive_64, is_same_size)           \
-int write_##elf_type(struct blob *data, uint64_t *off_p,                       \
-                    int clazz, int endianness,                                 \
-                    Elf64_##elf_type val)                                      \
-{                                                                              \
+
+/* For same-size types (e.g. ElfXX_Half, ElfXX_Word), skip the
+ * integer overflow check as it's never true */
+#define elf_SAME_SIZE_32bit_unsigned_overflow_check(bits32, bits64) (void) 0
+
+#define elf_DIFFERENT_SIZE_32bit_unsigned_overflow_check(bits32, bits64) do {  \
+    if (val > UINT##bits32##_MAX) {                                            \
+        pr_error("%s: Value %" PRIu##bits64 " overflows the 32-bit type\n",    \
+                 __func__, val);                                               \
+        return 1;                                                              \
+    }                                                                          \
+} while (0)
+
+#define elf_UNSIGNED_32bit_write_limit_check(bits32, bits64, same_size)        \
                                                                                \
-    is_same_size##_write__(elf_type, bits32, bits64, t_prefix,                 \
-                           prefix32, prefix64, disable_if_exclusive_64);       \
-    return 0;                                                                  \
+    same_size##_32bit_unsigned_overflow_check(bits32, bits64)                  \
+
+
+
+#define DECL_ELF_PRIMITIVE(name, bits32, bits64,                               \
+                           exclusive64, signedness, same_size)                 \
+                                                                               \
+int write_##name(struct blob *data, uint64_t *off_p,                           \
+                 int clazz, int encoding,                                      \
+                 Elf64_##name val)                                             \
+{                                                                              \
+    if (clazz == ELFCLASS32) {                                                 \
+        { exclusive64##_32bit_check; }                                         \
+                                                                               \
+        { signedness##_32bit_write_limit_check(bits32, bits64, same_size); }   \
+                                                                               \
+        const uint##bits32##_t tmp = (uint##bits32##_t)val;                    \
+        return write_generic(data, off_p, bits32 / 8, (const uint8_t *)&tmp,   \
+                             encoding, __func__);                              \
+    } else /* if (clazz == ELFCLASS64) */ {                                    \
+        const uint##bits64##_t tmp = (uint##bits64##_t)val;                    \
+        return write_generic(data, off_p, bits64 / 8, (const uint8_t *)&tmp,   \
+                             encoding, __func__);                              \
+    }                                                                          \
 }                                                                              \
 
-ELF_PRIMITIVE_FN_LIST
+ELF_PRIMITIVE_LIST
 
-#undef DECL_ELF_PRIMITIVE_FN
-#undef same_size_write__
-#undef different_size_write__
-#undef whatever_write64__
-#undef no_exclusive_64bit_write32__
-#undef exclusive_64bit_write32__
+#undef DECL_ELF_PRIMITIVE
+
+#undef elf_SIGNED_32bit_write_limit_check
+#undef elf_UNSIGNED_32bit_write_limit_check
+
+#undef elf_64BIT_EXCLUSIVE_32bit_check
+#undef elf_BOTH_CLASSES_32bit_check
 
 int write_ehdr(struct blob *data, uint64_t *off_p,
                int clazz, int encoding, const Elf64_Ehdr *ehdr)

@@ -2351,7 +2351,7 @@ int parse_dynsym(
     out->dt_syment = dt_syment_idx;
     out->shdr = sht_dynsym_idx;
     out->nsyms = nsyms;
-    out->syms = sym_arr;
+    out->syms = sym_arr; sym_arr = NULL;
     return 0;
 
 err:

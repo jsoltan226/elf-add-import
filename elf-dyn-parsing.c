@@ -3,6 +3,7 @@
 #include "elf.h"
 #include "util.h"
 #include "elf-types.h"
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -636,16 +637,8 @@ static int validate_sht_dynamic_if_exists(
         elf_idx_t *out
 )
 {
-    elf_idx_t sht_dynamic_idx = ELF_IDX_NULL;
-    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
-        if (shdrs->arr[i].sh_type == SHT_DYNAMIC) {
-            if (sht_dynamic_idx != ELF_IDX_NULL) {
-                pr_error("Multiple SHT_DYNAMIC section headers\n");
-                return 1;
-            }
-            sht_dynamic_idx = i;
-        }
-    }
+    elf_idx_t sht_dynamic_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNAMIC);
     if (sht_dynamic_idx == ELF_IDX_NULL) {
         pr_debug("No SHT_DYNAMIC .dynamic section header\n");
         *out = ELF_IDX_NULL;
@@ -956,7 +949,7 @@ static int parse_dt_hash(
 
     pr_debug("DT_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 "\n",
              out->hdr.nbucket, out->hdr.nchain);
-
+    out->present = true;
     return 0;
 
 err:
@@ -1133,15 +1126,9 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
                                        elf_idx_t *out)
 {
     *out = ELF_IDX_NULL;
-    elf_idx_t sht_hash_idx = ELF_IDX_NULL;
-    /* `read_validate_shdrs` guarantees that
-     * there aren't multiple `SHT_HASH` sections */
-    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
-        if (shdrs->arr[i].sh_type == SHT_HASH) {
-            sht_hash_idx = i;
-            break;
-        }
-    }
+
+    const elf_idx_t sht_hash_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_HASH);
     if (sht_hash_idx == ELF_IDX_NULL && sht_dynsym_idx == ELF_IDX_NULL) {
         pr_debug("%s: No SHT_DYNSYM or SHT_HASH section headers\n",
                 __func__);
@@ -1266,7 +1253,7 @@ static int parse_dt_gnu_hash(
     pr_debug("DT_GNU_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 ", "
              "symoffset: %" PRIu32 "\n",
              out->hdr.nbuckets, out->nchain, out->hdr.symoffset);
-
+    out->present = true;
     return 0;
 
 err:
@@ -1595,15 +1582,8 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
                                            elf_idx_t *out_sht_gnu_hash_idx)
 {
     *out_sht_gnu_hash_idx = ELF_IDX_NULL;
-    elf_idx_t sht_gnu_hash_idx = ELF_IDX_NULL;
-    /* `read_validate_shdrs` guarantees that
-     * there aren't multiple `SHT_GNU_HASH` sections */
-    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
-        if (shdrs->arr[i].sh_type == SHT_GNU_HASH) {
-            sht_gnu_hash_idx = i;
-            break;
-        }
-    }
+    const elf_idx_t sht_gnu_hash_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_GNU_HASH);
     if (sht_gnu_hash_idx == ELF_IDX_NULL && sht_dynsym_idx == ELF_IDX_NULL) {
         pr_debug("%s: No SHT_DYNSYM or SHT_GNU_HASH section headers\n",
                 __func__);
@@ -1656,9 +1636,124 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
     return ret;
 }
 
-int parse_dynsym(const struct blob *data, int clazz, int encoding,
-                 const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
-                 const struct elf_dyn_entries *entries)
+static int parse_dynamic_hash_tables(
+        const struct blob *data, int clazz, int encoding,
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
+        Elf64_Xword *out_dynsym_count
+)
+{
+    /* Inspired by:
+     *  https://lldb.llvm.org/cpp_reference/ObjectFileELF_8cpp_source.html
+     * (line ~4315) */
+
+    const bool dt_hash_ok = (0 ==
+            parse_dt_hash(data, clazz, encoding, phdrs, shdrs,
+                          entries, sht_dynsym_idx, out_hash)
+    );
+    const bool dt_gnu_hash_ok = (0 ==
+            parse_dt_gnu_hash(data, clazz, encoding, phdrs, shdrs,
+                              entries, sht_dynsym_idx, out_gnu_hash)
+    );
+    pr_debug("DT_HASH: %s, DT_GNU_HASH: %s\n",
+            dt_hash_ok ? "OK" : "not present/invalid",
+            dt_gnu_hash_ok ? "OK" : "not present/invalid");
+
+    if (!dt_hash_ok && !dt_gnu_hash_ok) {
+        pr_error("Neither DT_HASH nor DT_GNU_HASH are present. "
+                 "Cannot determine dynamic symbol count.\n");
+        return 1;
+    }
+
+    Elf64_Xword nsyms_dt_hash = 0, nsyms_dt_gnu_hash = 0;
+    if (dt_hash_ok)
+        nsyms_dt_hash = out_hash->hdr.nchain;
+
+    if (dt_gnu_hash_ok)
+        nsyms_dt_gnu_hash = (Elf64_Xword)out_gnu_hash->hdr.symoffset +
+                                out_gnu_hash->nchain;
+
+    if (dt_hash_ok && dt_gnu_hash_ok) {
+        if (nsyms_dt_hash != nsyms_dt_gnu_hash) {
+            pr_error("Symbol count from DT_HASH (%" PRIu64 ") "
+                     "doesn't match that from DT_GNU_HASH (%" PRIu64 ")\n",
+                     nsyms_dt_hash, nsyms_dt_gnu_hash);
+            return 1;
+        }
+    }
+
+    if (dt_gnu_hash_ok) *out_dynsym_count = nsyms_dt_gnu_hash;
+    else if (dt_hash_ok) *out_dynsym_count = nsyms_dt_hash;
+    else abort(); /* impossible outcome */
+
+    return 0;
+}
+
+static int validate_sht_dynsym_if_exists(
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Addr symtab_vaddr, Elf64_Off symtab_off,
+        Elf64_Xword symentsize, Elf64_Xword nsyms,
+        elf_idx_t dynstr_shdr_idx
+)
+{
+    if (sht_dynsym_idx == ELF_IDX_NULL)
+        return 0;
+
+    const Elf64_Shdr *const sht_dynsym = &shdrs->arr[sht_dynsym_idx];
+    int ret = 0;
+
+    if (dynstr_shdr_idx == ELF_IDX_NULL) {
+        pr_error("Dynsym section exists without a dynstr section\n");
+        ret = 1;
+    } else if (sht_dynsym->sh_link != dynstr_shdr_idx) {
+        pr_error("SHT_DYNSYM sh_link doesn't point to the dynstr section\n");
+        ret = 1;
+    }
+
+    if (sht_dynsym->sh_entsize != symentsize) {
+        pr_error("Invalid sh_entsize in SHT_DYNSYM section header\n");
+        ret = 1;
+    }
+
+    if (sht_dynsym->sh_size % symentsize != 0) {
+        pr_error("Invalid SHT_DYNSYM section size\n");
+        ret = 1;
+    } else {
+        const Elf64_Xword shdr_nsyms = sht_dynsym->sh_size / symentsize;
+        if (shdr_nsyms != nsyms) {
+            pr_error("SHT_DYNSYM shdr reports different dynamic symbol count "
+                     "(%" PRIu64 ") than the DT_(GNU_)HASH (%" PRIu64 ")\n",
+                     shdr_nsyms, nsyms);
+            ret = 1;
+        }
+    }
+
+
+    if (sht_dynsym->sh_addr != symtab_vaddr) {
+        pr_error("Invalid SHT_DYNSYM vaddr\n");
+        ret = 1;
+    }
+    if (sht_dynsym->sh_offset != symtab_off) {
+        pr_error("Invalid SHT_DYNSYM offset\n");
+        ret = 1;
+    }
+
+    /* SHT_DYNSYM's sh_info should hold:
+     *  "One greater than the symbol table index of the last local symbol
+     *  (binding STB_LOCAL)."
+     */
+    if (sht_dynsym->sh_info > nsyms) {
+        pr_error("Invalid value of SHT_DYNSYM sh_info\n");
+        ret = 1;
+    }
+
+    return ret;
+}
+
+static int find_dt_symtab(const struct elf_dyn_entries *entries, int clazz,
+                          Elf64_Addr *out_vaddr, Elf64_Xword *out_symentsize,
+                          elf_idx_t *out_dt_symtab, elf_idx_t *out_dt_syment)
 {
     elf_idx_t idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
     if (find_unique_dyn_entries(entries, 2,
@@ -1668,61 +1763,338 @@ int parse_dynsym(const struct blob *data, int clazz, int encoding,
         pr_error("Invalid or missing DT_SYMTAB and/or DT_SYMENT entries\n");
         return 1;
     }
-    const Elf64_Dyn *const dt_symtab = &entries->arr[idxs[0]];
-    const Elf64_Dyn *const dt_syment = &entries->arr[idxs[1]];
-    (void) dt_symtab;
+    const Elf64_Addr symtab_vaddr = entries->arr[idxs[0]].d_un.d_ptr;
+    const Elf64_Xword symentsize = entries->arr[idxs[1]].d_un.d_val;
 
-    if (!((clazz == ELFCLASS32 && dt_syment->d_un.d_val == sizeof(Elf32_Sym)) ||
-          (clazz == ELFCLASS64 && dt_syment->d_un.d_val == sizeof(Elf64_Sym))))
+    if (!((clazz == ELFCLASS32 && symentsize == sizeof(Elf32_Sym)) ||
+          (clazz == ELFCLASS64 && symentsize == sizeof(Elf64_Sym))))
     {
         pr_error("Invalid value of DT_SYMENT for class %s: %" PRIu64 "\n",
-                 clazz == ELFCLASS32 ? "ELFCLASS32" : "ELFCLASS64",
-                 dt_syment->d_un.d_val);
+                 clazz == ELFCLASS32 ? "ELFCLASS32" : "ELFCLASS64", symentsize);
         return 1;
     }
 
-    /* The following is inspired by:
-     *  https://lldb.llvm.org/cpp_reference/ObjectFileELF_8cpp_source.html
-     * (line ~4315) */
+    *out_vaddr = symtab_vaddr;
+    *out_symentsize = symentsize;
+    *out_dt_symtab = idxs[0];
+    *out_dt_syment = idxs[1];
+    return 0;
+}
 
-    elf_idx_t sht_dynsym_idx = ELF_IDX_NULL;
-    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
-        if (shdrs->arr[i].sh_type == SHT_DYNSYM) {
-            sht_dynsym_idx = i;
-            break;
+static int read_dynamic_symbol_table(
+        const struct blob *data, int clazz, int encoding,
+        Elf64_Off tbl_offset, Elf64_Xword nsyms,
+        Elf64_Xword dynstr_size, Elf64_Xword n_shdrs,
+        Elf64_Sym **out
+)
+{
+    Elf64_Sym *arr = NULL;
+
+    /* `nsyms <= SIZE_MAX` checked in `parse_dynsym` */
+    arr = calloc((size_t)nsyms, sizeof(Elf64_Sym));
+    if (arr == NULL) {
+        pr_error("Failed to allocate the dynamic symbols array\n");
+        goto err;
+    }
+
+    uint64_t off = tbl_offset;
+    for (Elf64_Xword i = 0; i < nsyms; i++) {
+        if (read_sym(data, &off, clazz, encoding, &arr[i])) {
+            pr_error("Failed to read dynamic symbol no %" PRIu64 "\n", i);
+            goto err;
+        }
+
+        if (arr[i].st_name >= dynstr_size) {
+            pr_error("Dynamic symbol entry no %" PRIu64 "'s st_name "
+                     "overflows the dynamic string table\n", i);
+            goto err;
+        }
+        if (arr[i].st_shndx < SHN_LORESERVE && arr[i].st_shndx >= n_shdrs) {
+            pr_error("Dynamic symbol entry no %" PRIu64 "'s st_shndx "
+                     "points to an invalid section\n", i);
+            goto err;
         }
     }
 
-    Elf64_Xword nsyms_dt_hash = 0;
-    struct elf_dt_hash dt_hash = { 0 };
-    if (parse_dt_hash(data, clazz, encoding, phdrs, shdrs,
-                      entries, sht_dynsym_idx, &dt_hash))
-    {
-        pr_error("Failed to parse DT_HASH\n");
-        return 1;
-    }
-    nsyms_dt_hash = dt_hash.hdr.nchain;
-    free(dt_hash.chain);
-    free(dt_hash.buckets);
-    dt_hash = (struct elf_dt_hash) { 0 };
+    *out = arr; arr = NULL;
+    return 0;
 
-    Elf64_Xword nsyms_dt_gnu_hash = 0;
-    struct elf_dt_gnu_hash dt_gnu_hash = { 0 };
-    if (parse_dt_gnu_hash(data, clazz, encoding, phdrs, shdrs,
-                          entries, sht_dynsym_idx, &dt_gnu_hash))
-    {
-        pr_error("Failed to parse DT_GNU_HASH\n");
-        return 1;
+err:
+    if (arr != NULL) {
+        free(arr);
+        arr = NULL;
     }
-    nsyms_dt_gnu_hash =
-        (Elf64_Xword)dt_gnu_hash.hdr.symoffset + dt_gnu_hash.nchain;
-    free(dt_gnu_hash.chain);
-    free(dt_gnu_hash.buckets);
-    free(dt_gnu_hash.bloom);
-    dt_gnu_hash = (struct elf_dt_gnu_hash) { 0 };
+    return 1;
+}
 
-    printf("nsyms: DT_HASH: %" PRIu64 ", DT_GNU_HASH: %" PRIu64 "\n",
-            nsyms_dt_hash, nsyms_dt_gnu_hash);
+static Elf32_Word sysv_hash(const uint8_t *name)
+{
+    Elf32_Word h = 0;
+    while (*name != '\0') {
+        h = (h << 4) + *name++;
+
+        const Elf32_Word g = h & UINT32_C(0xf0000000);
+        if (g != 0)
+            h ^= g >> 24;
+
+        h &= ~g;
+    }
+
+    return h;
+}
+
+static bool sysv_hash_contains_index(const struct elf_dt_hash *dt_hash,
+                                     const char *name, Elf64_Xword i)
+{
+    if (i > UINT32_MAX) {
+        pr_error("Index too large (integer overflow)\n");
+        return false;
+    }
+
+    const Elf32_Word h = sysv_hash((const uint8_t *)name);
+
+    Elf32_Word idx = dt_hash->buckets[h % dt_hash->hdr.nbucket];
+    Elf32_Word n_traversed = 0;
+    /* The value `STN_UNDEF` terminates the hash chain */
+    while (idx != STN_UNDEF) {
+        /* if the number of symbol indices we've traversed
+         * is greater than the count of them, something has gone wrong
+         * and we're probably in a cycle (e.g. `2` -> `7` -> `2` ...) */
+        if (n_traversed++ >= dt_hash->hdr.nchain) {
+            pr_error("DT_HASH chain cycle detected\n");
+            return false;
+        }
+
+        if (idx == (Elf32_Word)i)
+            return true;
+
+        idx = dt_hash->chain[idx];
+    }
+
+    pr_debug("DT_HASH index check failure: \"%s\"\n", name);
+    return false;
+}
+
+static Elf32_Word gnu_hash(const uint8_t *name) {
+    Elf32_Word h = 5381;
+
+    while (*name) {
+        h = (h << 5) + h + *name;
+        name++;
+    }
+
+    return h;
+}
+
+static bool gnu_hash_contains_index(const struct elf_dt_gnu_hash *dt_gnu_hash,
+                                    const char *name, Elf64_Xword i, int clazz)
+{
+    if (i > UINT32_MAX) {
+        pr_error("Index too large (integer overflow)\n");
+        return false;
+    }
+
+    const struct elf_dt_gnu_hash_hdr *const hdr = &dt_gnu_hash->hdr;
+    if (hdr->nbuckets == 0) {
+        pr_error("The DT_GNU_HASH table is empty (nbuckets == 0)\n");
+        return false;
+    }
+
+    const Elf32_Word h = gnu_hash((const uint8_t *)name);
+
+    /* Check the bloom filter first to reject (most) non-indexed names early */
+    {
+        const int clazz_bits = clazz == ELFCLASS32 ? 32 : 64;
+        const Elf64_Xword bloom_word =
+            dt_gnu_hash->bloom[(h / clazz_bits) % hdr->bloom_size];
+
+        /* `h % clazz_bits` and `(h >> bloom_shift) % clazz_bits` */
+        const int hash_bit_1 = h & (clazz_bits - 1);
+        const int hash_bit_2 = (h >> hdr->bloom_shift) & (clazz_bits - 1);
+
+        if (!((bloom_word >> hash_bit_1) & (bloom_word >> hash_bit_2) & 1)) {
+            pr_error("Symbol name hash failed the bloom filter test\n");
+            return false;
+        }
+    }
+
+    Elf32_Word sym_idx = dt_gnu_hash->buckets[h % hdr->nbuckets];
+    if (sym_idx == 0) {
+        pr_error("Invalid symbol index in bucket\n");
+        return false;
+    }
+
+    while (true) {
+        /* Every bucket is established (by `read_bloom_and_buckets`)
+         * to be >= `hdr->symoffset` */
+        const Elf32_Word chain_idx = sym_idx - hdr->symoffset;
+        if (chain_idx >= dt_gnu_hash->nchain)
+            break;
+
+        const Elf32_Word curr = dt_gnu_hash->chain[chain_idx];
+
+        if (sym_idx == (Elf32_Word)i) {
+            /* `i` must actually belong to this hash's chain, i.e.
+             * its high bits must match — this also catches the
+             * case where `i`'s own recorded name-hash doesn't
+             * agree with the bucket it was placed in. */
+            if (((curr ^ h) >> 1) == 0)
+                return true;
+        }
+
+        /* An entry with the 0x1 bit set terminates the chain array */
+        if (curr & UINT32_C(1))
+            break;
+
+        if (sym_idx == UINT32_MAX) {
+            pr_error("Symbol index too large (integer overflow)\n");
+            break;
+        }
+        sym_idx++;
+    }
+
+    pr_debug("DT_GNU_HASH index check failure: \"%s\"\n", name);
+    return false;
+}
+
+static int validate_dynamic_hash_tables(
+        const struct blob *data, const struct elf_dyn_strtab *strtab,
+        const struct elf_dt_hash *hash, const struct elf_dt_gnu_hash *gnu_hash,
+        const Elf64_Sym *symtab, Elf64_Xword nsyms, int clazz
+)
+{
+    for (Elf64_Xword i = 0; i < nsyms; i++) {
+        /* The 0th byte in a .dynstr strtab is reserved and always set to NUL
+         * so that `ElfXX_Sym`s with `st_name == 0` can indicate
+         * that they have no name */
+        if (symtab[i].st_name == 0)
+            continue;
+
+        /* `symtab[i].st_name` is bounds-checked against `strtab` by
+         * `read_dynamic_symbol_table`. */
+        const char *name = (const char *)
+            &data->data[strtab->off + symtab[i].st_name];
+
+        if (hash->present && !sysv_hash_contains_index(hash, name, i)) {
+            pr_error("DT_HASH indexing check of symbol no %" PRIu64 " "
+                     "has failed\n", i);
+            return 1;
+        }
+
+        if (gnu_hash->present && i >= gnu_hash->hdr.symoffset &&
+                !gnu_hash_contains_index(gnu_hash, name, i, clazz))
+        {
+            pr_error("DT_GNU_HASH indexing check of symbol no %" PRIu64 " "
+                     "has failed\n", i);
+            return 1;
+        }
+
+        pr_debug("\"%s\" -> symtab[%" PRIu64 "]\n", name, i);
+    }
 
     return 0;
+}
+
+int parse_dynsym(
+    const struct blob *data, int clazz, int encoding,
+    const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+    const struct elf_dyn_entries *entries, const struct elf_dyn_strtab *strtab,
+    struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
+    struct elf_dyn_symtab *out
+)
+{
+    *out = (struct elf_dyn_symtab) { 0 };
+    out->dt_symtab = ELF_IDX_NULL;
+    out->dt_syment = ELF_IDX_NULL;
+    out->shdr = ELF_IDX_NULL;
+
+    Elf64_Sym *sym_arr = NULL;
+
+    Elf64_Addr symtab_vaddr = 0;
+    Elf64_Xword symentsize = 0;
+    elf_idx_t dt_symtab_idx = ELF_IDX_NULL, dt_syment_idx = ELF_IDX_NULL;
+
+    /* First, get the vaddr of the dynsym table from the `DT_SYMTAB` entry */
+    if (find_dt_symtab(entries, clazz, &symtab_vaddr, &symentsize,
+                                       &dt_symtab_idx, &dt_syment_idx))
+    {
+        /* error already printed */
+        goto err;
+    }
+
+    /* the later functions correctly handle this value being `ELF_IDX_NULL` */
+    const elf_idx_t sht_dynsym_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
+
+    /* Now, since there's no way to directly get the size of the symtab,
+     * we must infer it from the DT_HASH and/or DT_GNU_HASH structure(s).
+     * What a great spec... */
+    Elf64_Xword nsyms = 0;
+    if (parse_dynamic_hash_tables(data, clazz, encoding, phdrs, shdrs, entries,
+                                  sht_dynsym_idx, out_hash, out_gnu_hash,
+                                  &nsyms))
+    {
+        pr_error("Invalid or missing dynamic hash table(s)\n");
+        goto err;
+    }
+    if (nsyms > UINT64_MAX / symentsize || nsyms > SIZE_MAX) {
+        pr_error("Number of dynamic symbols too large (integer overflow)\n");
+        goto err;
+    }
+    const Elf64_Xword symtab_size = nsyms * symentsize;
+
+    /* Validate that the table fits in a PT_LOAD segment,
+     * both in the file and in memory. This also maps the virtual address
+     * we got earlier into the actually useful file offset. */
+    Elf64_Off symtab_off = 0;
+    elf_idx_t ptload = ELF_IDX_NULL;
+    if (find_ptload_and_off_from_vaddr(symtab_vaddr, symtab_size, phdrs,
+                                       &symtab_off, &ptload))
+    {
+        pr_error("No PT_LOAD segment contains the dynamic symbol table\n");
+        goto err;
+    }
+
+    /* Finally, read the actual table */
+    if (read_dynamic_symbol_table(data, clazz, encoding, symtab_off, nsyms,
+                                  strtab->size, shdrs->num, &sym_arr))
+    {
+        pr_error("Failed to read the dynamic symbol table\n");
+        goto err;
+    }
+
+    /* Validate the hash tables by looking up every symbol in the symtab */
+    if (validate_dynamic_hash_tables(data, strtab, out_hash, out_gnu_hash,
+                                     sym_arr, nsyms, clazz))
+    {
+        pr_error("Failed to validate the DT(_GNU)_HASH table(s)\n");
+        goto err;
+    }
+
+    /* Validate the ".dynsym" (`SHT_DYNSYM`) section header, if present */
+    if (validate_sht_dynsym_if_exists(shdrs, sht_dynsym_idx,
+                                      symtab_vaddr, symtab_off, symentsize,
+                                      nsyms, strtab->shdr))
+    {
+        pr_error("Invalid dynsym section header\n");
+        goto err;
+    }
+
+    out->vaddr = symtab_vaddr;
+    out->off = symtab_off;
+    out->size = symtab_size;
+    out->entsize = symentsize;
+    out->dt_symtab = dt_symtab_idx;
+    out->dt_syment = dt_syment_idx;
+    out->shdr = sht_dynsym_idx;
+    out->nsyms = nsyms;
+    out->syms = sym_arr;
+    return 0;
+
+err:
+    if (sym_arr != NULL) {
+        free(sym_arr);
+        sym_arr = NULL;
+    }
+    return 1;
 }

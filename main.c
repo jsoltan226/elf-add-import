@@ -482,7 +482,9 @@ int main(int argc, char **argv)
         list_sections(&elf);
 
         if (parse_dynsym(&elf.data, elf.ident.clazz, elf.ident.data,
-                         &elf.phdrs, &elf.shdrs, &elf.dyn.entries))
+                         &elf.phdrs, &elf.shdrs,
+                         &elf.dyn.entries, &elf.dyn.strtab,
+                         &elf.dyn.hash, &elf.dyn.gnu_hash, &elf.dyn.symtab))
             goto err;
     }
 

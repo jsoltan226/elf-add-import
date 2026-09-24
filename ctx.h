@@ -261,6 +261,12 @@ struct elf {
          */
         struct elf_dt_hash {
             /**
+             * A flag indicating that the `DT_HASH` table is present
+             * and that this struct is valid.
+             */
+            bool present;
+
+            /**
              * Virtual address of the hash table header and contents;
              * the value of the `DT_HASH` dynamic entry.
              */
@@ -330,6 +336,8 @@ struct elf {
         } hash; /**< Data related to the legacy DT_HASH symbol lookup table. */
 
         struct elf_dt_gnu_hash {
+            bool present;
+
             Elf64_Addr vaddr;
             Elf64_Off off;
 
@@ -362,7 +370,16 @@ struct elf {
 
         /** @struct Data related to the dynamic symbol table (`.dynsym`). */
         struct elf_dyn_symtab {
-            char _[1];
+            Elf64_Addr vaddr;
+            Elf64_Off off;
+            Elf64_Xword size;
+            Elf64_Xword entsize;
+            elf_idx_t dt_symtab;
+            elf_idx_t dt_syment;
+            elf_idx_t shdr;
+
+            Elf64_Xword nsyms;
+            Elf64_Sym *syms;
         } symtab; /**< Data related to the dynamic symbol table (`.dynsym`). */
     } dyn; /**< Everything related to the dynamic section */
 

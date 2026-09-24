@@ -14,6 +14,7 @@
 
 struct elf;
 struct elf_phdrs;
+struct elf_shdrs;
 struct elf_dyn_entries;
 typedef Elf64_Xword elf_idx_t;
 
@@ -298,5 +299,41 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name);
  */
 void find_load_segment_limits(const struct elf *elf,
                               uint64_t *out_vaddr, uint64_t *out_align);
+
+/* Section headers with the following types may appear at most once
+ * in the section header table. This macro is used in `elf-parsing.c`
+ * to validate that property. */
+#define SHDR_UNIQUE_TYPES_LIST__ /* (name) */   \
+    X_(SHT_DYNAMIC)                             \
+    X_(SHT_DYNSYM)                              \
+    X_(SHT_HASH)                                \
+    X_(SHT_GNU_HASH)                            \
+
+/**
+ * A list of section header type names (SHT_*)
+ * which are validated by `read_validate_shdrs` in `parse_elf`
+ * to appear at most once in the shdr table.
+ * See the above `SHDR_UNIQUE_TYPES_LIST__`.
+ */
+enum shdr_unique_type {
+#define X_(name) shdr_unique_##name,
+    SHDR_UNIQUE_TYPES_LIST__
+#undef X_
+};
+
+/**
+ * Looks for the first occurrence of an shdr with a non-duplicate type
+ * (listed in `SHDR_UNIQUE_TYPES_LIST__`).
+ *
+ * @param[in] shdrs The section headers array to search. Must not be NULL.
+ *
+ * @param[in] type A member of `enum shdr_unique_type` corresponding to the
+ *  `SHT_*` section header type to look for.
+ *
+ * @return Index of the found section header (a reference into `shdrs`)
+ *  or `ELF_IDX_NULL` if not found.
+ */
+elf_idx_t find_unique_shdr_by_type(const struct elf_shdrs *shdrs,
+                                   enum shdr_unique_type type);
 
 #endif /* UTIL_H_ */

@@ -637,16 +637,25 @@ int read_validate_shdrs(const struct blob *data,
         }
 
         /* these section types cannot have duplicates */
-        elf_idx_t idx = ELF_IDX_NULL;
+        elf_idx_t bit_idx = ELF_IDX_NULL;
         switch (shdr.sh_type) {
-            case SHT_DYNAMIC:   idx = 0; break;
-            case SHT_HASH:      idx = 1; break;
-            case SHT_DYNSYM:    idx = 2; break;
-            case SHT_GNU_HASH:  idx = 3; break;
+#define X_(name)                                            \
+            static_assert(shdr_unique_##name < 8,           \
+                    "bit index too large for a uint8_t");   \
+            case name:                                      \
+                bit_idx = shdr_unique_##name;               \
+                break;                                      \
+
+            SHDR_UNIQUE_TYPES_LIST__
+#undef X_
+            case SHT_SYMTAB_SHNDX:
+                pr_error("SHT_SYMTAB_SHNDX sections are not supported.\n");
+                ret = 1;
+                break;
             default:
                 goto skip_duplicates_check;
         }
-        const uint8_t mask = UINT8_C(1) << idx;
+        const uint8_t mask = UINT8_C(1) << bit_idx;
 
         if (duplicates_bitfield & mask) {
             pr_error("Duplicate \"%s\" section header\n",

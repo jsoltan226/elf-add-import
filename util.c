@@ -336,3 +336,24 @@ void find_load_segment_limits(const struct elf *elf,
     *out_vaddr = max_vaddr;
     *out_align = max_align;
 }
+
+elf_idx_t find_unique_shdr_by_type(const struct elf_shdrs *shdrs,
+                                   enum shdr_unique_type type)
+{
+    Elf64_Word sht = SHT_NULL;
+    switch (type) {
+#define X_(name) case shdr_unique_##name: sht = name; break;
+        SHDR_UNIQUE_TYPES_LIST__
+#undef X_
+        default:
+            pr_error("Invalid unique shdr type\n");
+            abort();
+    }
+
+    for (elf_idx_t i = 0; i < shdrs->num; i++) {
+        if (shdrs->arr[i].sh_type == sht)
+            return i;
+    }
+
+    return ELF_IDX_NULL;
+}

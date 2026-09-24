@@ -255,7 +255,8 @@ int find_unique_dyn_entries(
         const Elf64_Sxword tags[static count], elf_idx_t out[static count]
 )
 {
-    int ret = 0;
+    bool ok = true;
+    bool all_missing = true;
 
     for (size_t i = 0; i < count; i++)
         out[i] = ELF_IDX_NULL;
@@ -267,7 +268,8 @@ int find_unique_dyn_entries(
                 if (out[j] != ELF_IDX_NULL) {
                     pr_error("Duplicate dynamic entry %" PRIi64 " (%s)\n",
                              t, dynamic_tag_to_string(t));
-                    ret = 1;
+                    ok = false;
+                    all_missing = false;
                 }
                 out[j] = i;
                 break;
@@ -279,11 +281,14 @@ int find_unique_dyn_entries(
         if (out[i] == ELF_IDX_NULL) {
             pr_debug("Missing dynamic entry %" PRIi64 " (%s)\n",
                      tags[i], dynamic_tag_to_string(tags[i]));
-            ret = 1;
+            ok = false;
         }
     }
 
-    return ret;
+    if (ok)
+        return 0;
+    else
+        return all_missing ? 1 : -1;
 }
 
 const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)

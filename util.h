@@ -251,7 +251,8 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
  *  contains the index of the entrycorresponding to `tags[i]`.
  *
  * @return 0 on success,
- *  non-zero if any of the DT_* entries are missing or have duplicates.
+ *  1 if none of the requested DT_* entries are present,
+ *  -1 in case of any other failure.
  */
 int find_unique_dyn_entries(
         const struct elf_dyn_entries *entries, size_t count,

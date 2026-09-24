@@ -336,6 +336,10 @@ struct elf {
         } hash; /**< Data related to the legacy DT_HASH symbol lookup table. */
 
         struct elf_dt_gnu_hash {
+            /**
+             * A flag indicating that the `DT_GNU_HASH` table is present
+             * and that this struct is valid.
+             */
             bool present;
 
             Elf64_Addr vaddr;
@@ -381,6 +385,17 @@ struct elf {
             Elf64_Xword nsyms;
             Elf64_Sym *syms;
         } symtab; /**< Data related to the dynamic symbol table (`.dynsym`). */
+
+        struct elf_dyn_symtab_shndx {
+            elf_idx_t shdr;
+            elf_idx_t dyn_entry;
+
+            Elf64_Addr vaddr;
+            Elf64_Off off;
+            Elf64_Xword size;
+
+            Elf32_Word *arr;
+        } symtab_shndx;
     } dyn; /**< Everything related to the dynamic section */
 
     /** The raw bytes of the ELF file **/

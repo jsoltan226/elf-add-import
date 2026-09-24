@@ -5,6 +5,9 @@ CompileFlags:
     - "-Wextra"
     - "-xc"
     - "-Wdocumentation"
+    - "-Wconversion"
+    - "-Wsign-conversion"
+    - "-Wshadow"
 
 Documentation:
   CommentFormat: Doxygen

@@ -240,7 +240,7 @@ static int validate_pt_phdr_phdr(
 static int parse_shdr_tbl_data_from_ehdr(
         const Elf64_Ehdr *ehdr,
         const struct blob *data, int clazz, int encoding,
-        Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Xword *out_shstrndx
+        Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Word *out_shstrndx
 );
 
 /**
@@ -584,7 +584,7 @@ int read_validate_shdrs(const struct blob *data,
     Elf64_Xword shnum = 0; /**< Total number of section headers */
     uint64_t shsize = 0; /**< Total size of section headers
                               (ehdr->e_shentsize * shnum) */
-    Elf64_Xword shstrndx = 0; /**< Real index of the shstrtab section */
+    Elf64_Word shstrndx = 0; /**< Real index of the shstrtab section */
     if (parse_shdr_tbl_data_from_ehdr(ehdr, data, clazz, encoding,
                                       &shnum, &shsize, &shstrndx))
     {
@@ -637,7 +637,7 @@ int read_validate_shdrs(const struct blob *data,
         }
 
         /* these section types cannot have duplicates */
-        elf_idx_t bit_idx = ELF_IDX_NULL;
+        uint8_t bit_idx = 0;
         switch (shdr.sh_type) {
 #define X_(name)                                            \
             static_assert(shdr_unique_##name < 8,           \
@@ -648,14 +648,10 @@ int read_validate_shdrs(const struct blob *data,
 
             SHDR_UNIQUE_TYPES_LIST__
 #undef X_
-            case SHT_SYMTAB_SHNDX:
-                pr_error("SHT_SYMTAB_SHNDX sections are not supported.\n");
-                ret = 1;
-                break;
             default:
                 goto skip_duplicates_check;
         }
-        const uint8_t mask = UINT8_C(1) << bit_idx;
+        const uint8_t mask = (uint8_t)(UINT8_C(1) << bit_idx);
 
         if (duplicates_bitfield & mask) {
             pr_error("Duplicate \"%s\" section header\n",
@@ -1090,7 +1086,7 @@ static int validate_pt_phdr_phdr(
 static int parse_shdr_tbl_data_from_ehdr(
         const Elf64_Ehdr *ehdr,
         const struct blob *data, int clazz, int encoding,
-        Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Xword *out_shstrndx
+        Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Word *out_shstrndx
 )
 {
     if (ehdr->e_shoff == 0 || ehdr->e_shentsize == 0) {

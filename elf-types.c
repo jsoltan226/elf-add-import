@@ -137,15 +137,16 @@ static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val);
             return 1;                                                          \
         }                                                                      \
                                                                                \
-        Elf64_##elf_type tmp;                                                  \
+        uint##bits64##_t tmp = 0;                                              \
         memcpy(&tmp, data->data + *off_p, sizeof(Elf64_##elf_type));           \
         *off_p += sizeof(Elf64_##elf_type);                                    \
                                                                                \
         if (endianness == ELFDATA2MSB) {                                       \
-            *out = (Elf64_##elf_type) be##bits64##toh(tmp);                    \
+            tmp = be##bits64##toh(tmp);                                        \
         } else /* if (endianness == ELFDATA2LSB) */ {                          \
-            *out = (Elf64_##elf_type) le##bits64##toh(tmp);                    \
+            tmp = le##bits64##toh(tmp);                                        \
         }                                                                      \
+        memcpy(out, &tmp, sizeof(tmp));                                        \
 
 #define different_size_read__(elf_type, bits32, bits64, t_prefix,              \
                               prefix32, prefix64, disable_if_exclusive_64)     \
@@ -213,15 +214,17 @@ ELF_PRIMITIVE_FN_LIST
             return 1;                                                          \
         }                                                                      \
                                                                                \
+        uint##bits64##_t tmp = 0;                                              \
+        memcpy(&tmp, &val, sizeof(tmp));                                       \
         if (endianness == ELFDATA2MSB) {                                       \
             memcpy(data->data + *off_p,                                        \
-                   &(t_prefix##bits32##_t){ htobe##bits32(val) },              \
-                   sizeof(t_prefix##bits32##_t)                                \
+                   &(uint##bits32##_t){ htobe##bits32((uint##bits32##_t)tmp) },\
+                   sizeof(uint##bits32##_t)                                    \
             );                                                                 \
         } else /* if (endianness == ELFDATA2LSB) */ {                          \
             memcpy(data->data + *off_p,                                        \
-                   &(t_prefix##bits32##_t){ htole##bits32(val) },              \
-                   sizeof(t_prefix##bits32##_t)                                \
+                   &(uint##bits32##_t){ htole##bits32((uint##bits32##_t)tmp) },\
+                   sizeof(uint##bits32##_t)                                    \
             );                                                                 \
         }                                                                      \
                                                                                \
@@ -237,15 +240,17 @@ ELF_PRIMITIVE_FN_LIST
             return 1;                                                          \
         }                                                                      \
                                                                                \
+        uint##bits64##_t tmp = 0;                                              \
+        memcpy(&tmp, &val, sizeof(tmp));                                       \
         if (endianness == ELFDATA2MSB) {                                       \
             memcpy(data->data + *off_p,                                        \
-                   &(t_prefix##bits64##_t){ htobe##bits64(val) },              \
-                   sizeof(t_prefix##bits64##_t)                                \
+                   &(uint##bits64##_t){ htobe##bits64((uint##bits64##_t)tmp) },\
+                   sizeof(uint##bits64##_t)                                    \
             );                                                                 \
         } else /* if (endianness == ELFDATA2LSB) */ {                          \
             memcpy(data->data + *off_p,                                        \
-                   &(t_prefix##bits64##_t){ htole##bits64(val) },              \
-                   sizeof(t_prefix##bits64##_t)                                \
+                   &(uint##bits64##_t){ htole##bits64((uint##bits64##_t)tmp) },\
+                   sizeof(uint##bits64##_t)                                    \
             );                                                                 \
         }                                                                      \
                                                                                \
@@ -436,10 +441,25 @@ int write_phdr(struct blob *data, uint64_t *off_p,
             return 1;
         }
     } else /* if (clazz == ELFCLASS32) */ {
-        if (write_Word(data, off_p, clazz, encoding, phdr->p_filesz) ||
-            write_Word(data, off_p, clazz, encoding, phdr->p_memsz) ||
+        if (phdr->p_filesz > UINT32_MAX) {
+            pr_error("p_filesz too large for Elf32_Word\n");
+            return 1;
+        }
+        const Elf32_Word filesz = (Elf32_Word)phdr->p_filesz;
+        if (phdr->p_memsz > UINT32_MAX) {
+            pr_error("p_memsz too large for Elf32_Word\n");
+            return 1;
+        }
+        const Elf32_Word memsz = (Elf32_Word)phdr->p_memsz;
+        if (phdr->p_align > UINT32_MAX) {
+            pr_error("p_align too large for Elf32_Word\n");
+            return 1;
+        }
+        const Elf32_Word align = (Elf32_Word)phdr->p_align;
+        if (write_Word(data, off_p, clazz, encoding, filesz) ||
+            write_Word(data, off_p, clazz, encoding, memsz) ||
             write_Word(data, off_p, clazz, encoding, phdr->p_flags) ||
-            write_Word(data, off_p, clazz, encoding, phdr->p_align))
+            write_Word(data, off_p, clazz, encoding, align))
         {
                 return 1;
         }
@@ -519,13 +539,9 @@ int write_shdr(struct blob *data, uint64_t *off_p,
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (write_Xword(data, off_p, clazz, encoding, shdr->sh_flags))
-            return 1;
-    } else /* if (clazz == ELFCLASS32) */ {
-        if (write_Word(data, off_p, clazz, encoding, shdr->sh_flags))
-            return 1;
-    }
+    /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
+    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_flags))
+        return 1;
 
     if (write_Addr(data, off_p, clazz, encoding, shdr->sh_addr) ||
         write_Off(data, off_p, clazz, encoding, shdr->sh_offset))
@@ -533,13 +549,9 @@ int write_shdr(struct blob *data, uint64_t *off_p,
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (write_Xword(data, off_p, clazz, encoding, shdr->sh_size))
-            return 1;
-    } else /* if (clazz == ELFCLASS32) */ {
-        if (write_Word(data, off_p, clazz, encoding, shdr->sh_size))
-            return 1;
-    }
+    /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
+    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_size))
+        return 1;
 
     if (write_Word(data, off_p, clazz, encoding, shdr->sh_link) ||
         write_Word(data, off_p, clazz, encoding, shdr->sh_info))
@@ -547,19 +559,10 @@ int write_shdr(struct blob *data, uint64_t *off_p,
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (write_Xword(data, off_p, clazz, encoding, shdr->sh_addralign) ||
-            write_Xword(data, off_p, clazz, encoding, shdr->sh_entsize))
-        {
-            return 1;
-        }
-    } else /* if (clazz == ELFCLASS32) */ {
-        if (write_Word(data, off_p, clazz, encoding, shdr->sh_addralign) ||
-            write_Word(data, off_p, clazz, encoding, shdr->sh_entsize))
-        {
-            return 1;
-        }
-    }
+    /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
+    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_addralign) ||
+        write_Addr(data, off_p, clazz, encoding, shdr->sh_entsize))
+        return 1;
 
     return 0;
 }
@@ -623,7 +626,7 @@ int write_dyn(struct blob *data, uint64_t *off_p,
             return 1;
         }
 
-        if (write_Sword(data, off_p, clazz, encoding, dyn->d_tag))
+        if (write_Sword(data, off_p, clazz, encoding, (Elf32_Sword)dyn->d_tag))
             return 1;
 
         /* See the above `read_dyn` */
@@ -632,7 +635,8 @@ int write_dyn(struct blob *data, uint64_t *off_p,
                     __func__);
             return 1;
         }
-        if (write_Word(data, off_p, clazz, encoding, dyn->d_un.d_val))
+        if (write_Word(data, off_p, clazz, encoding,
+                       (Elf32_Word)dyn->d_un.d_val))
             return 1;
     } else /* if (clazz == ELFCLASS64) */ {
         if (write_Sxword(data, off_p, clazz, encoding, dyn->d_tag))

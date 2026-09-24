@@ -53,8 +53,9 @@ int parse_dynsym(
     const struct blob *data, int clazz, int encoding,
     const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
     const struct elf_dyn_entries *entries, const struct elf_dyn_strtab *strtab,
+
     struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
-    struct elf_dyn_symtab *out
+    struct elf_dyn_symtab_shndx *out_symtab_shndx, struct elf_dyn_symtab *out
 );
 
 #endif /* ELF_DYN_PARSING_H_ */

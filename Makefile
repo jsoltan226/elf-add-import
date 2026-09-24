@@ -3,7 +3,7 @@ CC32 ?= $(CC) -m32
 AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
-COMMON_CFLAGS := -Wall -Wpedantic -Wextra -fPIC
+COMMON_CFLAGS := -Wall -Wpedantic -Wextra -Wconversion -Wsign-conversion -Wshadow -fPIC
 ASAN_FLAGS := -fsanitize=address,undefined
 CFLAGS ?=
 SO_LDFLAGS := -shared

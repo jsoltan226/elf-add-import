@@ -190,8 +190,8 @@ static int prepare_modifications(const struct mod_cfg *cfg,
  *
  * @return 0 on success, non-zero in case of integer overflow.
  */
-static int calculate_new_phsize(const struct elf *elf, int n_new_segments,
-                                Elf64_Xword *out);
+static int calculate_new_phsize(const struct elf *elf,
+                                Elf64_Xword n_new_segments, Elf64_Xword *out);
 
 /**
  * Calculates the new _DYNAMIC table's size as well as whether it can be
@@ -282,8 +282,8 @@ static int prepare_dyn_entries(
  *
  * @return 0 on success, non-zero on failure.
  */
-static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
-                                     Elf64_Xword *out_idx);
+static int append_new_ptload_segment(struct elf *elf, Elf64_Off end,
+                                     Elf64_Word flags, elf_idx_t *out_idx);
 
 /**
  * Performs the modifications calculated by `prepare_modifications`.
@@ -484,7 +484,8 @@ int main(int argc, char **argv)
         if (parse_dynsym(&elf.data, elf.ident.clazz, elf.ident.data,
                          &elf.phdrs, &elf.shdrs,
                          &elf.dyn.entries, &elf.dyn.strtab,
-                         &elf.dyn.hash, &elf.dyn.gnu_hash, &elf.dyn.symtab))
+                         &elf.dyn.hash, &elf.dyn.gnu_hash,
+                         &elf.dyn.symtab_shndx, &elf.dyn.symtab))
             goto err;
     }
 
@@ -681,7 +682,7 @@ static int prepare_modifications(const struct mod_cfg *cfg,
         }
 
         /** Create the new segment **/
-        Elf64_Xword first_ptload_idx = -1;
+        elf_idx_t first_ptload_idx = ELF_IDX_NULL;
         if (append_new_ptload_segment(elf, r, PF_R, &first_ptload_idx))
             return 1;
 
@@ -703,8 +704,8 @@ static int prepare_modifications(const struct mod_cfg *cfg,
     return 0;
 }
 
-static int calculate_new_phsize(const struct elf *elf, int n_new_segments,
-                                Elf64_Xword *out)
+static int calculate_new_phsize(const struct elf *elf,
+                                Elf64_Xword n_new_segments, Elf64_Xword *out)
 {
     if (elf->phdrs.num > UINT64_MAX - n_new_segments ||
         (elf->phdrs.num + n_new_segments) >
@@ -835,10 +836,10 @@ static int prepare_dyn_entries(
     return 0;
 }
 
-static int append_new_ptload_segment(struct elf *elf, Elf64_Off end, int flags,
-                                     Elf64_Xword *out_idx)
+static int append_new_ptload_segment(struct elf *elf, Elf64_Off end,
+                                     Elf64_Word flags, elf_idx_t *out_idx)
 {
-    *out_idx = -1;
+    *out_idx = ELF_IDX_NULL;
 
     if (elf->phdrs.num == UINT64_MAX) {
         pr_error("Can't add another program header (integer overflow)\n");

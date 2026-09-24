@@ -50,13 +50,20 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
             goto err;
         }
 
+        if (new_phnum > UINT32_MAX) {
+            pr_error("%s: New number of program headers too large "
+                    " to represent in sh_info which is a uint32_t; "
+                    "integer overflow\n", __func__);
+            goto err;
+        }
+
         /**
          * The spec says that if the phnum is >= PN_XNUM,
          * `e_phnum` should contain `PN_XNUM` while the real number of phdrs
          * should be stored in the `sh_info` field of the first section header.
          */
         elf->ehdr.e_phnum = PN_XNUM;
-        elf->shdrs.arr[0].sh_info = new_phnum;
+        elf->shdrs.arr[0].sh_info = (Elf64_Word)new_phnum;
         elf->shdrs.dirty = true;
     }
 
@@ -531,7 +538,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     pr_debug("Dynamic entries dirty: %d\n", !!elf->dyn.entries.dirty);
     if (elf->dyn.entries.dirty) {
         const Elf64_Phdr *const pt_dynamic = get_phdr_ro(elf, elf->dyn.phdr);
-        const Elf64_Xword fileentsize =
+        const Elf64_Half fileentsize =
             c == ELFCLASS32 ? sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
         if (serialize_arr(&elf->data,
                           (serializer_proc_t)write_dyn, elf->dyn.entries.arr,

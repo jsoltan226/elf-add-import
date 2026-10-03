@@ -12,6 +12,7 @@
 
 /**
  * @brief Parses .dynamic and all related sections.
+ * Part of `parse_elf` (`elf-parsing.h`).
  *
  * The parsing is done using only the PT_DYNAMIC program headers
  * (without relying on the section headers),
@@ -27,7 +28,7 @@
  * @param[in] phdrs Array of parsed and validated program headers.
  *  Must not be NULL.
  *
- * @param[in] shdrs Array of parsed and validated section haeders.
+ * @param[in] shdrs Array of parsed and validated section headers.
  *  Must not be NULL.
  *
  * @param[out] out Output pointer.
@@ -35,27 +36,23 @@
  *  and all allocated resources will be freed automatically.
  *
  * @param[out] out_dynentsize Output pointer for the size of a dynamic entry
- *  (`sizeof(Elf32_Dyn)` for 32-bit or `sizeof(Elf64_Dyn)` for 64-bit).
+ *  (`sizeof(Elf32_Dyn)` for 32-bit and `sizeof(Elf64_Dyn)` for 64-bit).
  *  May be NULL, in which case it simply won't be written to.
  *
- * @return 0 on success (valid dynamic linking data),
- *  non-zero on failure (invalid or non-existent dynamic linking data).
+ * @param[out] out_dynsymentsize Output pointer for the size of a dynamic symbol
+ *  (`sizeof(Elf32_Sym)` for 32-bit and `sizeof(Elf64_Sym)` for 64-bit);
+ *  the value of the `DT_SYMENT` entry.
+ *  May be NULL, in which case it simply won't be written to.
+ *
+ * @return 0 on success, non-zero if the dynamic linking data is
+ *  absent or malformed.
  */
 int parse_dyn(
         const struct blob *data, int clazz, int encoding,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
 
-        struct elf_dynamic *out, Elf64_Half *out_dynentsize
-);
-
-
-int parse_dynsym(
-    const struct blob *data, int clazz, int encoding,
-    const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
-    const struct elf_dyn_entries *entries, const struct elf_dyn_strtab *strtab,
-
-    struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
-    struct elf_dyn_symtab_shndx *out_symtab_shndx, struct elf_dyn_symtab *out
+        struct elf_dynamic *out,
+        Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize
 );
 
 #endif /* ELF_DYN_PARSING_H_ */

@@ -19,7 +19,7 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
     if (new_phnum > UINT64_MAX / elf->phentsize) {
         pr_error("%s: New number of program headers too large "
                 "(integer overflow)\n", __func__);
-        goto err;
+        return -1;
     }
 
     const Elf64_Xword old_phnum = elf->phdrs.num;
@@ -139,7 +139,7 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
     if (new_shnum > UINT64_MAX / elf->shentsize) {
         pr_error("%s: New number of section headers too large "
                 "(integer overflow)\n", __func__);
-        goto err;
+        return -1;
     }
 
     const Elf64_Xword old_shnum = elf->shdrs.num;
@@ -351,9 +351,11 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum)
 
     Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
 
-    if (new_dynnum > UINT64_MAX / elf->dynentsize ||
-        new_dynnum > SIZE_MAX / elf->dynentsize)
-    {
+    if (new_dynnum > UINT64_MAX / elf->dynentsize
+#if SIZE_MAX < UINT64_MAX
+        || new_dynnum > SIZE_MAX / elf->dynentsize
+#endif /* SIZE_MAX < UINT64_MAX */
+    ) {
         pr_error("New number of dynamic entries too large "
                 "(integer overflow)\n");
         return -1;
@@ -492,6 +494,36 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
     return 0;
 }
 
+/**
+ * Wrapper for `write_phdr`, used to suppress the
+ * incompatible function pointer types warning in `serialize_elf`.
+ */
+static inline int write_phdr_wrapper(struct blob *data, uint64_t *off_p,
+                                     int clazz, int encoding, const void *arr)
+{
+    return write_phdr(data, off_p, clazz, encoding, (const Elf64_Phdr *)arr);
+}
+
+/**
+ * Wrapper for `write_shdr`, used to suppress the
+ * incompatible function pointer types warning in `serialize_elf`.
+ */
+static inline int write_shdr_wrapper(struct blob *data, uint64_t *off_p,
+                                     int clazz, int encoding, const void *arr)
+{
+    return write_shdr(data, off_p, clazz, encoding, (const Elf64_Shdr *)arr);
+}
+
+/**
+ * Wrapper for `write_dyn`, used to suppress the
+ * incompatible function pointer types warning in `serialize_elf`.
+ */
+static inline int write_dyn_wrapper(struct blob *data, uint64_t *off_p,
+                                    int clazz, int encoding, const void *arr)
+{
+    return write_dyn(data, off_p, clazz, encoding, (const Elf64_Dyn *)arr);
+}
+
 int serialize_elf(struct elf *elf, bool reset_dirty_flags)
 {
     const int c = elf->ident.clazz, d = elf->ident.data;
@@ -510,7 +542,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     pr_debug("Program headers dirty: %d\n", !!elf->phdrs.dirty);
     if (elf->phdrs.dirty) {
         if (serialize_arr(&elf->data,
-                          (serializer_proc_t)write_phdr, elf->phdrs.arr,
+                          write_phdr_wrapper, elf->phdrs.arr,
                           sizeof(Elf64_Phdr), elf->phentsize,
                           elf->ehdr.e_phoff, elf->phdrs.num, c, d))
         {
@@ -524,7 +556,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     pr_debug("Section headers dirty: %d\n", !!elf->shdrs.dirty);
     if (elf->shdrs.dirty) {
         if (serialize_arr(&elf->data,
-                          (serializer_proc_t)write_shdr, elf->shdrs.arr,
+                          write_shdr_wrapper, elf->shdrs.arr,
                           sizeof(Elf64_Shdr), elf->shentsize,
                           elf->ehdr.e_shoff, elf->shdrs.num, c, d))
         {
@@ -541,7 +573,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
         const Elf64_Half fileentsize =
             c == ELFCLASS32 ? sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
         if (serialize_arr(&elf->data,
-                          (serializer_proc_t)write_dyn, elf->dyn.entries.arr,
+                          write_dyn_wrapper, elf->dyn.entries.arr,
                           sizeof(Elf64_Dyn), fileentsize,
                           pt_dynamic->p_offset, elf->dyn.entries.num, c, d))
         {

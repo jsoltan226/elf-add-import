@@ -1,7 +1,6 @@
 #include "elf-types.h"
 #include "elf.h"
 #include "util.h"
-#include "portable-endian.h"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -38,8 +37,14 @@ static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out);
  */
 static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val);
 
+static inline bool host_is_little_endian(void)
+{
+    const uint16_t x = UINT16_C(1);
+    return *(const uint8_t *)&x == UINT8_C(1);
+}
+
 static int read_generic(const struct blob *data, uint64_t *off_p,
-                        uint64_t n, uint8_t out[static n],
+                        uint64_t n, uint8_t *out /* [n] */,
                         int encoding, const char *fnname)
 {
 #ifndef pr_error
@@ -59,7 +64,7 @@ static int read_generic(const struct blob *data, uint64_t *off_p,
     }
 
     const bool swap_needed =
-        (BYTE_ORDER == LITTLE_ENDIAN) != (encoding == ELFDATA2LSB);
+        host_is_little_endian() != (encoding == ELFDATA2LSB);
     if (swap_needed) {
         for (uint64_t i = 0; i < n; i++)
             out[i] = data->data[*off_p + n - i - 1];
@@ -72,7 +77,7 @@ static int read_generic(const struct blob *data, uint64_t *off_p,
 }
 
 static int write_generic(struct blob *data, uint64_t *off_p,
-                         uint64_t n, const uint8_t val[static n],
+                         uint64_t n, const uint8_t *val /* [n] */,
                          int encoding, const char *fnname)
 {
 #ifndef pr_error
@@ -92,7 +97,7 @@ static int write_generic(struct blob *data, uint64_t *off_p,
     }
 
     const bool swap_needed =
-        (BYTE_ORDER == LITTLE_ENDIAN) != (encoding == ELFDATA2LSB);
+        host_is_little_endian() != (encoding == ELFDATA2LSB);
     if (swap_needed) {
         for (uint64_t i = 0; i < n; i++)
             data->data[*off_p + n - i - 1] = val[i];
@@ -716,7 +721,7 @@ const char * program_header_type_toString(Elf64_Word pt)
                return "unknown OS-specific program header";
 
 
-           if (pt >= PT_HIPROC && pt <= PT_LOPROC)
+           if (pt >= PT_LOPROC && pt <= PT_HIPROC)
                return "unknown processor-specific program header";
 
            return "(unknown)";

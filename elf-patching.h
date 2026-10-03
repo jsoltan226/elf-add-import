@@ -154,7 +154,7 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum);
 int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off);
 
 /**
- * @func
+ * @typedef
  * A function that serializes an ELF structure, like ElfXX_Phdr, ElfXX_Dyn, etc,
  *  from the generic in-memory representation
  *  to the desired class (32/64bit) and encoding (little/big endian).

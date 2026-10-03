@@ -17,6 +17,7 @@ int read_file(const char *path, struct blob *out)
 
     FILE *fp = NULL;
     uint8_t *buf = NULL;
+    size_t size = 0;
 
     out->data = NULL;
     out->size = 0;
@@ -32,14 +33,17 @@ int read_file(const char *path, struct blob *out)
                 path, errno, strerror(errno));
         goto err;
     }
-    long pos = ftell(fp);
-    if (pos < 0 ||
-            (unsigned long)pos > SIZE_MAX || (unsigned long)pos > UINT64_MAX)
     {
-        pr_error("Invalid file position: %ld\n", pos);
-        goto err;
+        long pos = ftell(fp);
+        if (pos < 0 ||
+                (unsigned long)pos > SIZE_MAX ||
+                (unsigned long)pos > UINT64_MAX)
+        {
+            pr_error("Invalid file position: %ld\n", pos);
+            goto err;
+        }
+        size = (size_t)pos;
     }
-    const size_t size = (size_t)pos;
 
     if (fseek(fp, 0, SEEK_SET)) {
         pr_error("Failed to seek to the start of input file \"%s\": %d (%s)\n",
@@ -144,11 +148,11 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size)
 
     if (size == 0 || new_n == 0) {
         pr_error("[%s] Invalid new size (0)\n", __func__);
-        goto err;
+        return NULL;
     } else if (new_n > SIZE_MAX / size) {
         pr_error("[%s] Size %zu*%zu too large (integer overflow)\n",
                  __func__, new_n, size);
-        goto err;
+        return NULL;
     }
 
     void *const ptr = ptr_p != NULL ? *ptr_p : NULL;
@@ -252,7 +256,7 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos)
 
 int find_unique_dyn_entries(
         const struct elf_dyn_entries *entries, size_t count,
-        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
+        const Elf64_Sxword *tags /* [count] */, elf_idx_t *out /* [count] */
 )
 {
     bool ok = true;
@@ -321,25 +325,59 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
 }
 
 void find_load_segment_limits(const struct elf *elf,
-                              uint64_t *out_vaddr, uint64_t *out_align)
+                              Elf64_Addr *out_vaddr, Elf64_Xword *out_align)
 {
-    uint64_t max_vaddr = 0;
+    Elf64_Addr max_vaddr = 0;
     /* fall back to the standard 4k page size if nothing is found */
-    uint64_t max_align = 4096;
+    Elf64_Xword max_align = 4096;
 
     for (Elf64_Xword i = 0; i < elf->phdrs.num; i++) {
         const Elf64_Phdr *const phdr = &elf->phdrs.arr[i];
+
         if (phdr->p_type != PT_LOAD)
             continue;
 
         if (phdr->p_vaddr + phdr->p_memsz > max_vaddr)
             max_vaddr = phdr->p_vaddr + phdr->p_memsz;
+
         if (phdr->p_align > max_align)
             max_align = phdr->p_align;
     }
 
     *out_vaddr = max_vaddr;
     *out_align = max_align;
+}
+
+int find_ptload_and_off_from_vaddr(Elf64_Addr vaddr, Elf64_Xword size,
+                                   const struct elf_phdrs *phdrs,
+                                   Elf64_Off *out_off,
+                                   elf_idx_t *out_pt_load_idx)
+{
+    if (out_off != NULL) *out_off = 0;
+    if (out_pt_load_idx != NULL) *out_pt_load_idx = ELF_IDX_NULL;
+
+    const elf_idx_t ptload_idx = find_containing_mem_ptload(phdrs, vaddr, size);
+    if (ptload_idx == ELF_IDX_NULL) {
+        pr_error("Given range not inside any PT_LOAD segment\n");
+        return 1;
+    }
+    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
+
+    const Elf64_Off off_in_load_seg = vaddr - ptload->p_vaddr;
+    if (off_in_load_seg > UINT64_MAX - ptload->p_offset) {
+        pr_error("Offset in load segment too large (integer overflow)\n");
+        return 1;
+    }
+    const Elf64_Off off = ptload->p_offset + off_in_load_seg;
+
+    if (find_containing_file_ptload(phdrs, off, size) != ptload_idx) {
+        pr_error("Given range not file-backed by its PT_LOAD segment\n");
+        return 1;
+    }
+
+    if (out_off != NULL) *out_off = off;
+    if (out_pt_load_idx != NULL) *out_pt_load_idx = ptload_idx;
+    return 0;
 }
 
 elf_idx_t find_unique_shdr_by_type(const struct elf_shdrs *shdrs,

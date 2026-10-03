@@ -248,7 +248,7 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
  * @param[in] tags Array of `count` DT_* tags to be found.
  *
  * @param[out] out Array of `count` indices. On success, `out[i]`
- *  contains the index of the entrycorresponding to `tags[i]`.
+ *  contains the index of the entry corresponding to `tags[i]`.
  *
  * @return 0 on success,
  *  1 if none of the requested DT_* entries are present,
@@ -256,7 +256,7 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
  */
 int find_unique_dyn_entries(
         const struct elf_dyn_entries *entries, size_t count,
-        const Elf64_Sxword tags[static count], elf_idx_t out[static count]
+        const Elf64_Sxword *tags /* [count] */, elf_idx_t *out /* [count] */
 );
 
 /**
@@ -292,14 +292,37 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name);
  *  in-memory array of program headers. Must not be NULL.
  *
  * @param[out] out_vaddr Output pointer for the found virtual address
- *  of the end of the last PT_LOAD segment. Must not be NULL.
+ *  of right after the end of the last PT_LOAD segment. Must not be NULL.
  *
  * @param[out] out_align Output pointer for the found maximum aligment value.
  *  Must not be NULL. The minimal returned "fallback" value is 4096.
  *  Due to the spec's requirements, the returned value is always a power of two.
  */
 void find_load_segment_limits(const struct elf *elf,
-                              uint64_t *out_vaddr, uint64_t *out_align);
+                              Elf64_Addr *out_vaddr, Elf64_Xword *out_align);
+
+/**
+ * Finds a `PT_LOAD` segment that contains the given virtual address range,
+ * and based on it, computes the corresponding file offset.
+ *
+ * @param[in] vaddr The virtual address; the start of the range.
+ *
+ * @param[in] size The size (length) of the range.
+ *
+ * @param[in] phdrs The program headers array to search. Must not be NULL.
+ *
+ * @param[out] out_off Output pointer for the calculated file offset.
+ *  May be NULL.
+ *
+ * @param[out] out_pt_load_idx Output pointer for the found containing
+ *  `PT_LOAD` segment. May be NULL.
+ *
+ * @return 0 if a containing segment is found, non-zero otherwise.
+ */
+int find_ptload_and_off_from_vaddr(Elf64_Addr vaddr, Elf64_Xword size,
+                                   const struct elf_phdrs *phdrs,
+                                   Elf64_Off *out_off,
+                                   elf_idx_t *out_pt_load_idx);
 
 /* Section headers with the following types may appear at most once
  * in the section header table. This macro is used in `elf-parsing.c`

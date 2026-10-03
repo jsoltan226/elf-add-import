@@ -638,6 +638,7 @@ int read_validate_shdrs(const struct blob *data,
 
         /* these section types cannot have duplicates */
         uint8_t bit_idx = 0;
+        bool do_duplicates_check = true;
         switch (shdr.sh_type) {
 #define X_(name)                                            \
             static_assert(shdr_unique_##name < 8,           \
@@ -649,18 +650,19 @@ int read_validate_shdrs(const struct blob *data,
             SHDR_UNIQUE_TYPES_LIST__
 #undef X_
             default:
-                goto skip_duplicates_check;
+                do_duplicates_check = false;
         }
-        const uint8_t mask = (uint8_t)(UINT8_C(1) << bit_idx);
+        if (do_duplicates_check) {
+            const uint8_t mask = (uint8_t)(UINT8_C(1) << bit_idx);
 
-        if (duplicates_bitfield & mask) {
-            pr_error("Duplicate \"%s\" section header\n",
-                     section_header_type_toString(shdr.sh_type));
-            ret = 1;
+            if (duplicates_bitfield & mask) {
+                pr_error("Duplicate \"%s\" section header\n",
+                         section_header_type_toString(shdr.sh_type));
+                ret = 1;
+            }
+            duplicates_bitfield |= mask;
         }
-        duplicates_bitfield |= mask;
 
-skip_duplicates_check:
         if (!ret)
             memcpy(&arr[i], &shdr, sizeof(Elf64_Shdr));
     }
@@ -689,14 +691,15 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
     }
 
     struct elf e = { 0 };
+    int c = ELFCLASSNONE, d = ELFDATANONE;
     memset(&e, 0, sizeof(struct elf));
 
     if (read_validate_ident(data, &e.ident)) {
         pr_error("Not an ELF file (invalid magic)\n");
         goto err;
     }
-    const int c = e.ident.clazz;
-    const int d = e.ident.data;
+    c = e.ident.clazz;
+    d = e.ident.data;
 
     if (read_validate_ehdr(data, c, d, &e.ehdr)) {
         pr_error("Invalid ELF header\n");
@@ -713,7 +716,9 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
         goto err;
     }
 
-    if (parse_dyn(data, c, d, &e.phdrs, &e.shdrs, &e.dyn, &e.dynentsize)) {
+    if (parse_dyn(data, c, d, &e.phdrs, &e.shdrs,
+                  &e.dyn, &e.dynentsize, &e.dynsymentsize))
+    {
         pr_error("Invalid or missing dynamic linking information\n");
         goto err;
     }
@@ -857,9 +862,11 @@ static int parse_phdr_tbl_data_from_ehdr(
     /* `ehdr->e_phentsize` is guaranteed to be either
      * `sizeof(Elf32_Phdr)` or `sizeof(Elf64_Phdr)`
      * by `read_validate_ehdr`. */
-    if (phnum >= SIZE_MAX / ehdr->e_phentsize ||
-        phnum >= UINT64_MAX / ehdr->e_phentsize)
-    {
+    if (phnum >= UINT64_MAX / ehdr->e_phentsize
+#if SIZE_MAX < UINT64_MAX
+        || phnum >= SIZE_MAX / ehdr->e_phentsize
+#endif /* SIZE_MAX < UINT64_MAX */
+    ) {
         pr_error("Number of program headers too large "
                 "(integer overflow)\n");
         return -1;
@@ -1133,9 +1140,11 @@ static int parse_shdr_tbl_data_from_ehdr(
     /* `ehdr->e_shentsize` is guaranteed to be either
      * `sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)`
      * by `read_validate_ehdr`. */
-    if (shnum >= SIZE_MAX / ehdr->e_shentsize ||
-        shnum >= UINT64_MAX / ehdr->e_shentsize)
-    {
+    if (shnum >= UINT64_MAX / ehdr->e_shentsize
+#if SIZE_MAX < UINT64_MAX
+        || shnum >= SIZE_MAX / ehdr->e_shentsize
+#endif /* SIZE_MAX < UINT64_MAX */
+    ) {
         pr_error("Number of section headers too large "
                 "(integer overflow)\n");
         return 1;

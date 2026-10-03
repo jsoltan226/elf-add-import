@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+void sus_test(void);
+
 extern __attribute__((visibility("default")))
 int printf(const char *fmt, ...)
 {

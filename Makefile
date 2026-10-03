@@ -3,8 +3,8 @@ CC32 ?= $(CC) -m32
 AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
-COMMON_CFLAGS := -Wall -Wpedantic -Wextra -Wconversion -Wsign-conversion -Wshadow -fPIC
-ASAN_FLAGS := -fsanitize=address,undefined
+COMMON_CFLAGS := -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wcast-align -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wold-style-definition -Wredundant-decls -Wnested-externs -Wwrite-strings -Wswitch-enum -Wswitch-default -Wfloat-equal -Wpointer-arith -Wbad-function-cast -Wstrict-overflow=5 -Walloca -Wvla -Wstack-protector -Wformat-overflow=2 -Wformat-truncation=2 -Wstringop-overflow=4 -Warray-bounds=2 -Wshift-overflow=2 -Wnull-dereference -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wjump-misses-init -Wtrampolines -Wuse-after-free=3 -std=c11 -fPIC
+ASAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g3
 CFLAGS ?=
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP

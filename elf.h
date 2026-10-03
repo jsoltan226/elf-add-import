@@ -21,8 +21,8 @@
  *  definitions. Copied from glibc.
  */
 
-#ifndef _ELF_H
-#define	_ELF_H 1
+#ifndef ELF_ADD_IMPORT_ELF_H_
+#define	ELF_ADD_IMPORT_ELF_H_ 1
 
 /* Standard ELF types.  */
 

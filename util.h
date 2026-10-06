@@ -171,6 +171,56 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
 void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
 
 /**
+ * Resizes (reallocs) a table/array in a safe and generic way,
+ * zeroing out any deleted (when shrinking) or new (when growing) entries.
+ *
+ * Optionally, bounds checks are performed against:
+ *  - the file data (when `data` is not `NULL)` -
+ *      both the old & new tables don't overflow the file data,
+ *  - the PT_LOAD segments (when `phdrs` is not `NULL`) -
+ *      the new table is fully contained in some single PT_LOAD segment.
+ *
+ * Note: Resizing to 0 is not supported.
+ *
+ * @param[in] name Name of the table being resized, used for debug messages.
+ *
+ * @param[in] mementsz The size of the in-memory type of the table entries,
+ *  e.g. for the phdr table it's always going to be `sizeof(Elf64_Phdr)`.
+ *  Must be greater than 0.
+ *
+ * @param[in] fileentsz The size of the class-dependent file type
+ *  of the table entries (e.g. for the phdr table it's going to be
+ *  `elf->phentsize`, i.e. `sizeof(Elf32_Phdr)` for `ELFCLASS32`
+ *  and `sizeof(Elf64_Phdr)` for `ELFCLASS64`).
+ *  Must be greater than 0.
+ *
+ * @param[in] off Offset of the table to be resized.
+ *  Used for the bounds checks. Ignored if both of them are disabled.
+ *
+ * @param[in] old_n_ents Old (current) number of entries in the array.
+ *
+ * @param[in] new_n_ents Desired new number of entries in the array.
+ *
+ * @param[in] phdrs Program headers array, used for the PT_LOAD bounds check.
+ *  Pass in `NULL` to disable the PT_LOAD bounds check.
+ *
+ * @param[in] data ELF file data, used for the file data bounds check.
+ *  Pass in `NULL` to disable the file data bounds check.
+ *
+ * @param[in,out] ptr_p The pointer to the array to realloc. Must not be NULL.
+ *
+ * @param[out] out_new_file_size Output pointer for the new
+ *  (class-dependent) file size of the table. May be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ *  In case of failure, `*ptr_p` is freed and set to `NULL`.
+ */
+int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
+                 Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
+                 const struct elf_phdrs *phdrs, const struct blob *data,
+                 void **ptr_p, Elf64_Xword *out_new_file_size);
+
+/**
  * Attempts to find a PT_LOAD segment
  * that contains a given virtual address range.
  *
@@ -322,6 +372,29 @@ void find_load_segment_limits(const struct elf *elf,
 int find_ptload_and_off_from_vaddr(Elf64_Addr vaddr, Elf64_Xword size,
                                    const struct elf_phdrs *phdrs,
                                    Elf64_Off *out_off,
+                                   elf_idx_t *out_pt_load_idx);
+
+/**
+ * Finds a `PT_LOAD` segment that contains the given file range,
+ * and based on it, computes the corresponding virtual address.
+ *
+ * @param[in] off The file offset; the start of the range.
+ *
+ * @param[in] size The size (length) of the range.
+ *
+ * @param[in] phdrs The program headers array to search. Must not be NULL.
+ *
+ * @param[out] out_vaddr Output pointer for the calculated virtual address.
+ *  May be NULL.
+ *
+ * @param[out] out_pt_load_idx Output pointer for the found containing
+ *  `PT_LOAD` segment. May be NULL.
+ *
+ * @return 0 if a containing segment is found, non-zero otherwise.
+ */
+int find_ptload_and_vaddr_from_off(Elf64_Off off, Elf64_Xword size,
+                                   const struct elf_phdrs *phdrs,
+                                   Elf64_Off *out_vaddr,
                                    elf_idx_t *out_pt_load_idx);
 
 /* Section headers with the following types may appear at most once

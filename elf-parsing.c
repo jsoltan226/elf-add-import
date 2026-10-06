@@ -380,11 +380,18 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
     }
 
     pr_debug("Section header size: 0x%" PRIx16 "\n", out->e_shentsize);
-    if ((clazz == ELFCLASS32 && out->e_shentsize != sizeof(Elf32_Shdr)) ||
-        (clazz == ELFCLASS64 && out->e_shentsize != sizeof(Elf64_Shdr)))
-    {
-        pr_error("Invalid section header size\n");
-        ret = 1;
+    if (out->e_shnum == 0) {
+        if (out->e_shentsize != 0) {
+            pr_error("Invalid section header size\n");
+            ret = 1;
+        }
+    } else {
+        if ((clazz == ELFCLASS32 && out->e_shentsize != sizeof(Elf32_Shdr)) ||
+            (clazz == ELFCLASS64 && out->e_shentsize != sizeof(Elf64_Shdr)))
+        {
+            pr_error("Invalid section header size\n");
+            ret = 1;
+        }
     }
 
     pr_debug("Number of section headers: %" PRIu16 "\n", out->e_shnum);
@@ -1138,16 +1145,21 @@ static int parse_shdr_tbl_data_from_ehdr(
     }
 
     /* `ehdr->e_shentsize` is guaranteed to be either
-     * `sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)`
+     * `sizeof(Elf32_Shdr)` or `sizeof(Elf64_Shdr)` or 0
      * by `read_validate_ehdr`. */
-    if (shnum >= UINT64_MAX / ehdr->e_shentsize
-#if SIZE_MAX < UINT64_MAX
-        || shnum >= SIZE_MAX / ehdr->e_shentsize
-#endif /* SIZE_MAX < UINT64_MAX */
-    ) {
-        pr_error("Number of section headers too large "
-                "(integer overflow)\n");
+    if (ehdr->e_shentsize == 0 && shnum != 0) {
+        pr_error("Invalid number of section headers\n");
         return 1;
+    } else if (ehdr->e_shentsize > 0) {
+        if (shnum >= UINT64_MAX / ehdr->e_shentsize
+#if SIZE_MAX < UINT64_MAX
+            || shnum >= SIZE_MAX / ehdr->e_shentsize
+#endif /* SIZE_MAX < UINT64_MAX */
+        ) {
+            pr_error("Number of section headers too large "
+                    "(integer overflow)\n");
+            return 1;
+        }
     }
 
     const uint64_t shsize = (uint64_t)ehdr->e_shentsize * shnum;

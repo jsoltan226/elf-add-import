@@ -3,11 +3,38 @@
 #include "ctx.h"
 #include "util.h"
 #include "elf-types.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <inttypes.h>
+
+static int find_unique_phdr(const struct elf_phdrs *phdrs, Elf64_Word type,
+                            elf_idx_t *out)
+{
+    if (out != NULL) *out = ELF_IDX_NULL;
+
+    elf_idx_t idx = ELF_IDX_NULL;
+    for (Elf64_Xword i = 0; i < phdrs->num; i++) {
+        if (phdrs->arr[i].p_type == type) {
+            if (idx != ELF_IDX_NULL) {
+                pr_error("Duplicate \"%s\" program header\n",
+                         program_header_type_toString(type));
+                return -1;
+            }
+            idx = i;
+        }
+    }
+    if (idx == ELF_IDX_NULL) {
+        pr_debug("No \"%s\" program header\n",
+                 program_header_type_toString(type));
+        return 1;
+    }
+
+    if (out != NULL) *out = idx;
+    return 0;
+}
 
 int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
 {
@@ -16,29 +43,28 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
         return -1;
     }
 
-    if (new_phnum > UINT64_MAX / elf->phentsize) {
-        pr_error("%s: New number of program headers too large "
-                "(integer overflow)\n", __func__);
+    elf_idx_t pt_phdr_idx = ELF_IDX_NULL;
+    const int r = find_unique_phdr(&elf->phdrs, PT_PHDR, &pt_phdr_idx);
+    if (r < 0) /* duplicate PT_PHDR */
         return -1;
-    }
+    else if (r == 0)
+        pr_debug("PT_PHDR is present\n");
 
-    const Elf64_Xword old_phnum = elf->phdrs.num;
+    /* Only require PT_LOAD containment of the phdr table if PT_PHDR exists */
+    const struct elf_phdrs *phdrs_for_ptload_check =
+        (pt_phdr_idx != ELF_IDX_NULL) ? &elf->phdrs : NULL;
 
-    /** Resize the phdrs array **/
-    if ((elf->phdrs.arr = safe_realloc((void **)&elf->phdrs.arr,
-                                   new_phnum, sizeof(Elf64_Phdr))) == NULL)
+    Elf64_Xword new_phdr_tbl_size = 0;
+    if (resize_table("program headers", sizeof(Elf64_Phdr), elf->phentsize,
+                     elf->ehdr.e_phoff, elf->phdrs.num, new_phnum,
+                     phdrs_for_ptload_check, &elf->data,
+                     (void **)&elf->phdrs.arr, &new_phdr_tbl_size))
     {
-        pr_error("Failed to resize (realloc) the program headers array\n");
+        pr_error("Failed to resize the program header table\n");
         goto err;
     }
-    /* zero out the new entries if growing */
-    if (new_phnum > old_phnum) {
-        /* neither can overflow */
-        memset(&elf->phdrs.arr[old_phnum], 0,
-                (new_phnum - old_phnum) * sizeof(Elf64_Phdr));
-    }
 
-    /** Update the headers' fields */
+    /* Update the headers' fields */
 
     if (new_phnum < PN_XNUM) {
         /* "normal" case */
@@ -66,6 +92,14 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
         elf->shdrs.arr[0].sh_info = (Elf64_Word)new_phnum;
         elf->shdrs.dirty = true;
     }
+    elf->ehdr_dirty = true;
+
+    /* Also update the "self-reference" PT_PHDR, if present */
+    if (pt_phdr_idx != ELF_IDX_NULL) {
+        Elf64_Phdr *const pt_phdr = get_phdr_rw(elf, pt_phdr_idx);
+        pt_phdr->p_filesz = new_phdr_tbl_size;
+        pt_phdr->p_memsz = new_phdr_tbl_size;
+    }
 
     elf->phdrs.num = new_phnum;
     elf->phdrs.size = new_phnum * elf->phentsize;
@@ -80,6 +114,7 @@ err:
     elf->phdrs.num = 0;
     elf->phdrs.size = 0;
     elf->phdrs.dirty = false;
+    elf->ehdr_dirty = false;
     return 1;
 }
 
@@ -91,19 +126,27 @@ int update_phoff(struct elf *elf, Elf64_Off new_off)
         return -1;
     }
     const Elf64_Xword phsize = elf->phdrs.size;
-
-    const elf_idx_t ptload_idx =
-        find_containing_file_ptload(&elf->phdrs, new_off, phsize);
-    if (ptload_idx == ELF_IDX_NULL) {
-        pr_error("New program header location not inside any PT_LOAD segment\n");
-        return -1;
-    }
-    const Elf64_Phdr *const ptload = get_phdr_ro(elf, ptload_idx);
-
-    const Elf64_Xword data_size = elf->data.size;
-    if (phsize > data_size || new_off > data_size - phsize) {
+    if (new_off > elf->data.size || phsize > elf->data.size - new_off) {
         pr_error("New program header location would overflow file data\n");
+        return 1;
+    }
+
+    /* Find PT_PHDR, if present */
+    elf_idx_t pt_phdr_idx = ELF_IDX_NULL;
+    Elf64_Addr new_vaddr = 0;
+    const int r = find_unique_phdr(&elf->phdrs, PT_PHDR, &pt_phdr_idx);
+    if (r < 0) /* duplicate PT_PHDR */
         return -1;
+
+    /* Only require PT_LOAD containment of the phdr table if PT_PHDR exists */
+    if (pt_phdr_idx != ELF_IDX_NULL) {
+        if (find_ptload_and_vaddr_from_off(new_off, phsize, &elf->phdrs,
+                                           &new_vaddr, NULL))
+        {
+            pr_error("New program header location not fully contained within "
+                     "any single PT_LOAD segment while PT_PHDR exists\n");
+            return 1;
+        }
     }
 
     /* Update the ELF header */
@@ -111,20 +154,17 @@ int update_phoff(struct elf *elf, Elf64_Off new_off)
     elf->ehdr_dirty = true;
 
     /* Update the "self-reference" PT_PHDR if it exists */
-    const Elf64_Off off_in_seg = new_off - ptload->p_offset;
-    const Elf64_Addr new_vaddr = ptload->p_vaddr + off_in_seg;
-    for (Elf64_Xword i = 0; i < elf->phdrs.num; i++) {
-        Elf64_Phdr *const phdr = &elf->phdrs.arr[i];
-        if (phdr->p_type != PT_PHDR)
-            continue;
-
-        phdr->p_offset = new_off;
-        phdr->p_filesz = phsize;
-        phdr->p_memsz = phsize;
-        phdr->p_vaddr = new_vaddr;
-        phdr->p_paddr = new_vaddr;
-        elf->phdrs.dirty = true;
+    if (pt_phdr_idx != ELF_IDX_NULL) {
+        Elf64_Phdr *const pt_phdr = get_phdr_rw(elf, pt_phdr_idx);
+        pt_phdr->p_offset = new_off;
+        pt_phdr->p_filesz = phsize;
+        pt_phdr->p_memsz = phsize;
+        /* `new_vaddr` always initialized when `pt_phdr_idx != NULL` */
+        pt_phdr->p_vaddr = new_vaddr;
+        pt_phdr->p_paddr = new_vaddr;
     }
+
+    elf->phdrs.dirty = true;
 
     return 0;
 }
@@ -136,34 +176,16 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
         return -1;
     }
 
-    if (new_shnum > UINT64_MAX / elf->shentsize) {
-        pr_error("%s: New number of section headers too large "
-                "(integer overflow)\n", __func__);
-        return -1;
-    }
-
-    const Elf64_Xword old_shnum = elf->shdrs.num;
-
-    /** Resize the `shdrs` array **/
-    if ((elf->shdrs.arr = safe_realloc((void **)&elf->shdrs.arr,
-                                   new_shnum, sizeof(Elf64_Shdr))) == NULL)
+    Elf64_Xword new_shdr_tbl_size = 0;
+    if (resize_table("section headers", sizeof(Elf64_Shdr), elf->shentsize,
+                     elf->ehdr.e_shoff, elf->shdrs.num, new_shnum, NULL,
+                     &elf->data, (void **)&elf->shdrs.arr, &new_shdr_tbl_size))
     {
-        pr_error("Failed to resize (realloc) the section headers array\n");
+        pr_error("Failed to resize the section header table\n");
         goto err;
     }
-    /* checked by `safe_realloc` */
 
-    if (old_shnum > SIZE_MAX / sizeof(Elf64_Shdr)) {
-        pr_error("%s: Old size too large (integer overflow)\n", __func__);
-        goto err;
-    }
-    /* append zeroized entries if growing */
-    if (new_shnum > old_shnum) {
-        memset(&elf->shdrs.arr[old_shnum], 0,
-                (new_shnum - old_shnum) * sizeof(Elf64_Shdr));
-    }
-
-    /** Update the headers' fields **/
+    /* Update the headers' fields */
     if (new_shnum < SHN_LORESERVE) {
         /* "normal" case */
         elf->ehdr.e_shnum = (Elf64_Half)new_shnum;
@@ -176,9 +198,10 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
         elf->ehdr.e_shnum = 0;
         elf->shdrs.arr[0].sh_size = new_shnum;
     }
+    elf->ehdr_dirty = true;
 
     elf->shdrs.num = new_shnum;
-    elf->shdrs.size = new_shnum * elf->shentsize;
+    elf->shdrs.size = new_shdr_tbl_size;
     elf->shdrs.dirty = true;
     return 0;
 
@@ -200,24 +223,19 @@ int update_shoff(struct elf *elf, Elf64_Off new_off)
         pr_error("%s: Invalid parameters\n", __func__);
         return -1;
     }
+
     const Elf64_Xword shsize = elf->shdrs.size;
-
-    if (find_containing_file_ptload(&elf->phdrs, new_off, shsize)
-            == ELF_IDX_NULL)
-    {
-        pr_error("New section header location not inside any PT_LOAD segment\n");
-        return -1;
-    }
-
     const Elf64_Xword data_size = elf->data.size;
     if (shsize > data_size || new_off > data_size - shsize) {
-        pr_error("New section header location would overflow file data\n");
+        pr_error("The section header table at the given offset "
+                 "would overflow file data\n");
         return -1;
     }
 
     /* Update the ELF header */
     elf->ehdr.e_shoff = new_off;
     elf->ehdr_dirty = true;
+    elf->shdrs.dirty = true;
     return 0;
 }
 
@@ -269,33 +287,6 @@ int update_shstrndx(struct elf *elf, Elf64_Word new_shstrndx)
     }
 }
 
-static int find_unique_dynamic_entry(const struct elf_dynamic *dyn,
-                                     Elf64_Sxword tag, Elf64_Dyn **out)
-{
-    Elf64_Dyn *found = NULL;
-    for (Elf64_Xword i = 0; i < dyn->entries.num; i++) {
-        Elf64_Dyn *const curr = &dyn->entries.arr[i];
-        if (curr->d_tag != tag)
-            continue;
-
-        if (found != NULL) {
-            pr_error("Duplicate %s dynamic entry\n",
-                     dynamic_tag_to_string(tag));
-            return 1;
-        }
-
-        found = curr;
-    }
-    if (found == NULL) {
-        pr_error("No %s dynamic entry was found\n",
-                 dynamic_tag_to_string(tag));
-        return 1;
-    }
-
-    *out = found;
-    return 0;
-}
-
 int update_dynstr_range(struct elf *elf,
                         Elf64_Addr new_addr, Elf64_Xword new_size)
 {
@@ -304,31 +295,30 @@ int update_dynstr_range(struct elf *elf,
         return -1;
     }
 
-    const elf_idx_t pt_load_idx =
-        find_containing_mem_ptload(&elf->phdrs, new_addr, new_size);
-    if (pt_load_idx == ELF_IDX_NULL) {
-        pr_error("The provided new dynstr range "
-                "is not within any PT_LOAD segment\n");
-        return 1;
-    }
-    const Elf64_Phdr *const pt_load = get_phdr_ro(elf, pt_load_idx);
-
-    Elf64_Dyn *dt_strtab = NULL, *dt_strsz = NULL;
-    if (find_unique_dynamic_entry(&elf->dyn, DT_STRTAB, &dt_strtab) ||
-        find_unique_dynamic_entry(&elf->dyn, DT_STRSZ, &dt_strsz))
+    Elf64_Off new_off = 0;
+    if (find_ptload_and_off_from_vaddr(new_addr, new_size, &elf->phdrs,
+                                       &new_off, NULL))
     {
-        pr_error("Couldn't find the DT_STRTAB and DT_STRSZ dynamic entries\n");
+        pr_error("The provided new dynstr range "
+                 "is not fully contained by any single PT_LOAD segment\n");
         return 1;
     }
 
-    dt_strtab->d_un.d_ptr = new_addr;
-    dt_strsz->d_un.d_val = new_size;
+    enum { DT_STRTAB_IDX = 0, DT_STRSZ_IDX = 1 };
+    elf_idx_t idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
+    if (find_unique_dyn_entries(&elf->dyn.entries, 2,
+                                (Elf64_Sxword[]){ DT_STRTAB, DT_STRSZ }, idxs))
+    {
+        pr_error("Couldn't find the DT_STRTAB and/or DT_STRSZ entries\n");
+        return 1;
+    }
+
+    get_dyn_rw(elf, idxs[DT_STRTAB_IDX])->d_un.d_ptr = new_addr;
+    get_dyn_rw(elf, idxs[DT_STRSZ_IDX])->d_un.d_val = new_size;
     elf->dyn.entries.dirty = true;
 
     elf->dyn.strtab.vaddr = new_addr;
     elf->dyn.strtab.size = new_size;
-
-    const Elf64_Off new_off = pt_load->p_offset + (new_addr - pt_load->p_vaddr);
     elf->dyn.strtab.off = new_off;
 
     if (elf->dyn.strtab.shdr != ELF_IDX_NULL) {
@@ -344,49 +334,26 @@ int update_dynstr_range(struct elf *elf,
 
 int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum)
 {
-    if (elf == NULL || elf->dyn.phdr == ELF_IDX_NULL) {
+    Elf64_Phdr *pt_dynamic = NULL;
+    if (elf == NULL || elf->dyn.phdr == ELF_IDX_NULL ||
+        (pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr)) == NULL)
+    {
         pr_error("%s: Invalid parameters\n", __func__);
         return -1;
     }
 
-    Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
-
-    if (new_dynnum > UINT64_MAX / elf->dynentsize
-#if SIZE_MAX < UINT64_MAX
-        || new_dynnum > SIZE_MAX / elf->dynentsize
-#endif /* SIZE_MAX < UINT64_MAX */
-    ) {
-        pr_error("New number of dynamic entries too large "
-                "(integer overflow)\n");
-        return -1;
-    }
-
-    const Elf64_Xword new_dyn_tbl_size = new_dynnum * elf->dynentsize;
-    if (find_containing_file_ptload(&elf->phdrs,
-                pt_dynamic->p_offset, new_dyn_tbl_size) == ELF_IDX_NULL ||
-        find_containing_mem_ptload(&elf->phdrs,
-                pt_dynamic->p_vaddr, new_dyn_tbl_size) == ELF_IDX_NULL)
+    Elf64_Xword new_dyn_tbl_size = 0;
+    if (resize_table("DYNAMIC entries", sizeof(Elf64_Dyn), elf->dynentsize,
+                     pt_dynamic->p_offset, elf->dyn.entries.num, new_dynnum,
+                     &elf->phdrs, &elf->data, (void **)&elf->dyn.entries.arr,
+                     &new_dyn_tbl_size))
     {
-        pr_error("New DYNAMIC table is not contained in any PT_LOAD segment\n");
-        return -1;
-    }
-
-    const Elf64_Xword old_dynnum = elf->dyn.entries.num;
-
-    elf->dyn.entries.arr = safe_realloc((void **)&elf->dyn.entries.arr,
-                                        new_dynnum, sizeof(Elf64_Dyn));
-    if (elf->dyn.entries.arr == NULL) {
-        pr_error("Failed to resize (realloc) the dynamic entries array\n");
-        elf->dyn.entries.num = 0;
+        pr_error("Failed to resize the DYNAMIC entries table\n");
         return 1;
     }
+
     elf->dyn.entries.num = new_dynnum;
     elf->dyn.entries.size = new_dyn_tbl_size;
-
-    if (new_dynnum > old_dynnum) {
-        memset(&elf->dyn.entries.arr[old_dynnum], 0,
-                (new_dynnum - old_dynnum) * sizeof(Elf64_Dyn));
-    }
 
     pt_dynamic->p_filesz = new_dyn_tbl_size;
     pt_dynamic->p_memsz = new_dyn_tbl_size;
@@ -411,17 +378,13 @@ int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off)
 
     Elf64_Phdr *const pt_dynamic = get_phdr_rw(elf, elf->dyn.phdr);
 
-    const elf_idx_t ptload_idx = find_containing_file_ptload(&elf->phdrs,
-            new_off, elf->dyn.entries.size);
-    if (ptload_idx == ELF_IDX_NULL) {
-        pr_error("The given offset would make the dynamic table "
-                 "not be contained within a PT_LOAD segment\n");
-        return -1;
+    Elf64_Addr new_vaddr = 0;
+    if (find_ptload_and_vaddr_from_off(new_off, elf->dyn.entries.size,
+                                       &elf->phdrs, &new_vaddr, NULL))
+    {
+        pr_error("No single PT_LOAD segment would fully contain the "
+                 "dynamic table at the given new offset\n");
     }
-    const Elf64_Phdr *const ptload = get_phdr_ro(elf, ptload_idx);
-
-    const Elf64_Off off_in_seg = new_off - ptload->p_offset;
-    const Elf64_Addr new_vaddr = ptload->p_vaddr + off_in_seg;
 
     pt_dynamic->p_offset = new_off;
     pt_dynamic->p_vaddr = new_vaddr;
@@ -436,6 +399,76 @@ int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off)
     }
 
     pr_debug("[%s] New DYNAMIC table offset: 0x%" PRIx64 " "
+             "(vaddr: 0x%" PRIx64 ")\n",
+             __func__, new_off, new_vaddr);
+    return 0;
+}
+
+int update_dyn_sym_count(struct elf *elf, Elf64_Xword new_nsyms)
+{
+    if (elf == NULL ||
+        elf->dyn.symtab.nsyms < 1 || elf->dyn.symtab.syms == NULL)
+    {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    struct elf_dyn_symtab *const symtab = &elf->dyn.symtab;
+
+    Elf64_Xword new_symtab_size = 0;
+    if (resize_table("dynsym", sizeof(Elf64_Sym), elf->dynsymentsize,
+                     symtab->off, symtab->nsyms, new_nsyms, &elf->phdrs,
+                     &elf->data, (void **)&symtab->syms, &new_symtab_size))
+    {
+        pr_error("Failed to resize the dynamic symbol table\n");
+        return 1;
+    }
+
+    symtab->nsyms = new_nsyms;
+    symtab->size = new_symtab_size;
+
+    if (symtab->shdr != ELF_IDX_NULL) {
+        get_shdr_rw(elf, symtab->shdr)->sh_size = new_symtab_size;
+        elf->shdrs.dirty = true;
+    }
+
+    pr_debug("[%s] New dyn symtab size: 0x%" PRIx64 " "
+             "(%" PRIu64 " symbols)\n",
+             __func__, new_symtab_size, new_nsyms);
+    return 0;
+}
+
+int update_dyn_symtab_off(struct elf *elf, Elf64_Off new_off)
+{
+    if (elf == NULL ||
+        elf->dyn.symtab.nsyms < 1 || elf->dyn.symtab.syms == NULL)
+    {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    struct elf_dyn_symtab *const symtab = &elf->dyn.symtab;
+
+    Elf64_Addr new_vaddr = 0;
+    if (find_ptload_and_vaddr_from_off(new_off, elf->dyn.entries.size,
+                                       &elf->phdrs, &new_vaddr, NULL))
+    {
+        pr_error("No single PT_LOAD segment would fully contain the "
+                 "dynamic symbol table at the given offset\n");
+        return 1;
+    }
+
+    get_dyn_rw(elf, symtab->dt_symtab)->d_un.d_ptr = new_vaddr;
+    elf->dyn.entries.dirty = true;
+    symtab->off = new_off;
+    symtab->vaddr = new_vaddr;
+
+    if (symtab->shdr != ELF_IDX_NULL) {
+        Elf64_Shdr *const sht_dynsym = get_shdr_rw(elf, symtab->shdr);
+        sht_dynsym->sh_offset = new_off;
+        sht_dynsym->sh_addr = new_vaddr;
+        elf->shdrs.dirty = true;
+    }
+
+    pr_debug("[%s] New dyn symtab offset: 0x%" PRIx64 " "
              "(vaddr: 0x%" PRIx64 ")\n",
              __func__, new_off, new_vaddr);
     return 0;

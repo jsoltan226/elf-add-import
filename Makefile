@@ -11,7 +11,7 @@ DEPFLAGS?=-MMD -MP
 LDFLAGS?=-pie -Wl,-hash-style=both
 ARFLAGS=rcs
 LIBS?=
-STRIP?=strip
+STRIP?=strip -s --strip-section-headers
 DEBUGSTRIP?=strip -d
 STRIPFLAGS?=-g -s
 

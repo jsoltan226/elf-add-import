@@ -569,6 +569,8 @@ struct elf {
              * without additional checks.
              */
             Elf64_Sym *syms;
+
+            bool dirty; /**< Dirty flag (see `serialize_elf`). */
         } symtab; /**< Data related to the dynamic symbol table (`.dynsym`). */
 
         /**

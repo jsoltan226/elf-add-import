@@ -1513,6 +1513,8 @@ static int read_dt_gnu_hash_hdr(
         ret = 1;
     }
 
+    pr_debug("DT_GNU_HASH nbuckets: %" PRIu32 "\n", out->nbuckets);
+
     return ret;
 }
 

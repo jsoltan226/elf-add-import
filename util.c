@@ -176,6 +176,92 @@ err:
     return NULL;
 }
 
+int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
+                 Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
+                 const struct elf_phdrs *phdrs, const struct blob *data,
+                 void **ptr_p, Elf64_Xword *out_new_file_size)
+{
+    if (mementsz == 0 || fileentsz == 0 || ptr_p == NULL ||
+        new_n_ents > SIZE_MAX)
+    {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
+    /* Calculate sizes */
+    if (old_n_ents > UINT64_MAX / fileentsz
+#if SIZE_MAX < UINT64_MAX
+        || old_n_ents > SIZE_MAX / entsize
+#endif /* SIZE_MAX < UINT64_MAX */
+    ) {
+        pr_error("%s: Old table size too large (integer overflow)\n", __func__);
+        return -1;
+    }
+    const Elf64_Xword old_total_file_size = old_n_ents * fileentsz;
+
+    if (new_n_ents > UINT64_MAX / fileentsz
+#if SIZE_MAX < UINT64_MAX
+        || new_n_ents > SIZE_MAX / entsize
+#endif /* SIZE_MAX < UINT64_MAX */
+    ) {
+        pr_error("%s: New table size too large (integer overflow)\n", __func__);
+        return 1;
+    }
+    const Elf64_Xword new_total_file_size = new_n_ents * fileentsz;
+
+    /* Do bounds checks */
+    if (data != NULL) {
+        if (off > data->size || old_total_file_size > data->size - off) {
+            pr_error("The table (at the current location!) "
+                     "overflows file data\n");
+            return -1;
+        }
+        if (off > data->size || new_total_file_size > data->size - off) {
+            pr_error("The table at the new location "
+                     "would overflow file data\n");
+            return 1;
+        }
+    }
+    if (phdrs != NULL) {
+        if (find_ptload_and_vaddr_from_off(off, new_total_file_size, phdrs,
+                                           NULL, NULL))
+        {
+            pr_error("No single PT_LOAD segment would fully contain the table "
+                     "after resizing (to %" PRIu64 " entries)\n", new_n_ents);
+            return 1;
+        }
+    }
+
+    /* Actually realloc (and zero out) the data */
+
+    if (old_n_ents > new_n_ents) {
+        memset((uint8_t *)*ptr_p + (new_n_ents * mementsz), 0,
+                (old_n_ents - new_n_ents) * mementsz);
+    }
+
+    *ptr_p = safe_realloc(ptr_p, (size_t)new_n_ents, mementsz);
+    if (*ptr_p == NULL) {
+        pr_error("%s: Realloc (to %" PRIu64 " entries) failed\n",
+                 __func__, new_n_ents);
+        return 1;
+    }
+
+    if (new_n_ents > old_n_ents) {
+        memset(((uint8_t *)*ptr_p) + (old_n_ents * mementsz), 0,
+               (new_n_ents - old_n_ents) * mementsz);
+    }
+
+    pr_debug("[%s] Resized table \"%s\" from "
+             "0x%" PRIx64 " bytes (%" PRIu64 " entries) to "
+             "0x%" PRIx64 " bytes (%" PRIu64 " entries) "
+             "with bounds checks: data: %d, ptload: %d\n", __func__, name,
+             old_total_file_size, old_n_ents, new_total_file_size, new_n_ents,
+             (data != NULL), (phdrs != NULL)
+    );
+    if (out_new_file_size != NULL) *out_new_file_size = new_total_file_size;
+    return 0;
+}
+
 elf_idx_t
 find_containing_mem_ptload(const struct elf_phdrs *phdrs,
                            Elf64_Addr start, Elf64_Xword size)
@@ -376,6 +462,38 @@ int find_ptload_and_off_from_vaddr(Elf64_Addr vaddr, Elf64_Xword size,
     }
 
     if (out_off != NULL) *out_off = off;
+    if (out_pt_load_idx != NULL) *out_pt_load_idx = ptload_idx;
+    return 0;
+}
+
+int find_ptload_and_vaddr_from_off(Elf64_Off off, Elf64_Xword size,
+                                   const struct elf_phdrs *phdrs,
+                                   Elf64_Off *out_vaddr,
+                                   elf_idx_t *out_pt_load_idx)
+{
+    if (out_vaddr != NULL) *out_vaddr = 0;
+    if (out_pt_load_idx != NULL) *out_pt_load_idx = ELF_IDX_NULL;
+
+    const elf_idx_t ptload_idx = find_containing_file_ptload(phdrs, off, size);
+    if (ptload_idx == ELF_IDX_NULL) {
+        pr_error("Given range not inside any PT_LOAD segment\n");
+        return 1;
+    }
+    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
+
+    const Elf64_Off off_in_load_seg = off - ptload->p_offset;
+    if (off_in_load_seg > UINT64_MAX - ptload->p_vaddr) {
+        pr_error("Offset in load segment too large (integer overflow)\n");
+        return 1;
+    }
+    const Elf64_Addr vaddr = ptload->p_vaddr + off_in_load_seg;
+
+    if (find_containing_mem_ptload(phdrs, vaddr, size) != ptload_idx) {
+        pr_error("Given range not memory-backed by its PT_LOAD segment\n");
+        return 1;
+    }
+
+    if (out_vaddr != NULL) *out_vaddr = vaddr;
     if (out_pt_load_idx != NULL) *out_pt_load_idx = ptload_idx;
     return 0;
 }

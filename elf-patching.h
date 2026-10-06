@@ -14,8 +14,11 @@
  * and updates the appropriate metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * If growing, the new phdr entries are zeroed out.
+ * The new phdrs (if growing) or the old ones (if shrinking) are zeroed out.
  * Resizing to 0 is not supported.
+ *
+ * Note: If the PT_PHDR program header exists, the program header table
+ * after resizing must be contained in a PT_LOAD segment.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -32,9 +35,8 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum);
  * as well as all other relevant metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * Note: If also resizing the table, be sure to call `update_phnum` **BEFORE**
- *  `update_phoff` as the bounds checks in this function rely on the
- *  current size of `elf->phdrs`.
+ * Note: If the PT_PHDR program header exists, the program header table
+ * at the new location must be contained in a PT_LOAD segment.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -50,7 +52,7 @@ int update_phoff(struct elf *elf, Elf64_Off new_off);
  * and updates the appropriate metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * If growing, the new shdr entries are zeroed out.
+ * The new shdrs (if growing) or the old ones (if shrinking) are zeroed out.
  * Resizing to 0 is not supported.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
@@ -67,10 +69,6 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum);
  * Updates the section header table offset in the ELF header,
  * as well as all other relevant metadata.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
- *
- * Note: If also resizing the table, be sure to call `update_shnum` **BEFORE**
- *  `update_shoff` as the bounds checks in this function rely on the
- *  current size of `elf->shdrs`.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -99,15 +97,15 @@ int update_shstrndx(struct elf *elf, Elf64_Word new_shstrndx);
 
 /**
  * Updates the DT_STRTAB and DT_STRSZ entries which hold the values
- * for the .dynstr dynamic string table virtual address and size, respectively.
+ * of the dynamic string table's vaddr and size, respectively.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * This function also handles the automatic updating of the ".dynstr" section
- * in the section headers, if one is found.
+ * This function also handles the automatic updating of the
+ * ".dynstr" section header, if present.
  * All other relevant metadata in `elf` is also handled.
  *
  * Note: The provided range must be contained in a PT_LOAD segment
- *  already present in `elf`.
+ *  already present in `elf->phdrs`.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -127,9 +125,8 @@ int update_dynstr_range(struct elf *elf,
  * If growing, the new entries are zeroed out, making their type `DT_NULL`.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
- * Note: If also moving the table, be sure to call `update_dyn_tbl_off`
- *  **BEFORE** `update_dyn_tbl_num` as the bounds checks in this function
- *  rely on the current offset & vaddr of the _DYNAMIC table.
+ * Note: The DYNAMIC table after resizing must fit in a PT_LOAD segment
+ *  already present in `elf->phdrs`.
  *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
@@ -143,6 +140,9 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum);
  * Updates the offset (location) of the dynamic entries array.
  * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
  *
+ * Note: The DYNAMIC table at the new offset must fit in a PT_LOAD segment
+ *  already present in `elf->phdrs`.
+ *
  * @param[in,out] elf The ELF context to update. Must not be NULL.
  *
  * @param[in] new_off The desired new file offset of the DYNAMIC table.
@@ -152,6 +152,44 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum);
  * @return 0 on success, non-zero on failure.
  */
 int update_dyn_tbl_off(struct elf *elf, Elf64_Off new_off);
+
+
+/**
+ * Updates the number of dynamic symbols (resizes the table).
+ * Any entries added or deleted as a result of the operation are zeroed out.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * Note: The dynsym table at the new offset must fit in a PT_LOAD segment
+ *  already present in `elf->phdrs`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_nsyms The desired new number of dynamic symbols in the table.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_dyn_sym_count(struct elf *elf, Elf64_Xword new_nsyms);
+
+/**
+ * Updates the offset (location) of the dynamic symbol table
+ * and sets the value of `DT_SYMTAB` to the corresponding virtual address.
+ * Does **NOT** copy, move, erase or otherwise modify any data in `elf->data`.
+ *
+ * All other metadata in `elf` is handled,
+ * including the ".dynsym" section header, if present.
+ *
+ * Note: The dynsym table at the new offset must fit in a PT_LOAD segment
+ *  already present in `elf->phdrs`.
+ *
+ * @param[in,out] elf The ELF context to update. Must not be NULL.
+ *
+ * @param[in] new_off The desired new file offset of the dynamic symbol table.
+ *  The offset must account for the fact that the dynamic table
+ *  must wholly reside within an existing PT_LOAD segment.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int update_dyn_symtab_off(struct elf *elf, Elf64_Off new_off);
 
 /**
  * @typedef

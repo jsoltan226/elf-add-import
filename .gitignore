@@ -11,3 +11,5 @@ test.c
 tmp
 test
 vgcore.*
+/sus
+/sus2

@@ -673,6 +673,90 @@ int write_sym(struct blob *data, uint64_t *off_p,
     return 0;
 }
 
+int write_verdef(struct blob *data, uint64_t *off_p,
+                 int clazz, int encoding, const Elf64_Verdef *vd)
+{
+    return 0
+        || write_Half(data, off_p, clazz, encoding, vd->vd_version)
+        || write_Half(data, off_p, clazz, encoding, vd->vd_flags)
+        || write_Half(data, off_p, clazz, encoding, vd->vd_ndx)
+        || write_Half(data, off_p, clazz, encoding, vd->vd_cnt)
+        || write_Word(data, off_p, clazz, encoding, vd->vd_hash)
+        || write_Word(data, off_p, clazz, encoding, vd->vd_aux)
+        || write_Word(data, off_p, clazz, encoding, vd->vd_next);
+}
+
+int read_verdef(const struct blob *data, uint64_t *off_p,
+                int clazz, int encoding, Elf64_Verdef *out)
+{
+    return 0
+        || read_Half(data, off_p, clazz, encoding, &out->vd_version)
+        || read_Half(data, off_p, clazz, encoding, &out->vd_flags)
+        || read_Half(data, off_p, clazz, encoding, &out->vd_ndx)
+        || read_Half(data, off_p, clazz, encoding, &out->vd_cnt)
+        || read_Word(data, off_p, clazz, encoding, &out->vd_hash)
+        || read_Word(data, off_p, clazz, encoding, &out->vd_aux)
+        || read_Word(data, off_p, clazz, encoding, &out->vd_next);
+}
+
+int write_verdaux(struct blob *data, uint64_t *off_p,
+                  int clazz, int encoding, const Elf64_Verdaux *vda)
+{
+    return write_Word(data, off_p, clazz, encoding, vda->vda_name) ||
+           write_Word(data, off_p, clazz, encoding, vda->vda_next);
+}
+
+int read_verdaux(const struct blob *data, uint64_t *off_p,
+                 int clazz, int encoding, Elf64_Verdaux *out)
+{
+    return read_Word(data, off_p, clazz, encoding, &out->vda_name) ||
+           read_Word(data, off_p, clazz, encoding, &out->vda_next);
+}
+
+int write_verneed(struct blob *data, uint64_t *off_p,
+                  int clazz, int encoding, const Elf64_Verneed *vn)
+{
+    return 0
+        || write_Half(data, off_p, clazz, encoding, vn->vn_version)
+        || write_Half(data, off_p, clazz, encoding, vn->vn_cnt)
+        || write_Word(data, off_p, clazz, encoding, vn->vn_file)
+        || write_Word(data, off_p, clazz, encoding, vn->vn_aux)
+        || write_Word(data, off_p, clazz, encoding, vn->vn_next);
+}
+
+int read_verneed(const struct blob *data, uint64_t *off_p,
+                 int clazz, int encoding, Elf64_Verneed *out)
+{
+    return 0
+        || read_Half(data, off_p, clazz, encoding, &out->vn_version)
+        || read_Half(data, off_p, clazz, encoding, &out->vn_cnt)
+        || read_Word(data, off_p, clazz, encoding, &out->vn_file)
+        || read_Word(data, off_p, clazz, encoding, &out->vn_aux)
+        || read_Word(data, off_p, clazz, encoding, &out->vn_next);
+}
+
+int write_vernaux(struct blob *data, uint64_t *off_p,
+                  int clazz, int encoding, const Elf64_Vernaux *vna)
+{
+    return 0
+        || write_Word(data, off_p, clazz, encoding, vna->vna_hash)
+        || write_Half(data, off_p, clazz, encoding, vna->vna_flags)
+        || write_Half(data, off_p, clazz, encoding, vna->vna_other)
+        || write_Word(data, off_p, clazz, encoding, vna->vna_name)
+        || write_Word(data, off_p, clazz, encoding, vna->vna_next);
+}
+
+int read_vernaux(const struct blob *data, uint64_t *off_p,
+                 int clazz, int encoding, Elf64_Vernaux *out)
+{
+    return 0
+        || read_Word(data, off_p, clazz, encoding, &out->vna_hash)
+        || read_Half(data, off_p, clazz, encoding, &out->vna_flags)
+        || read_Half(data, off_p, clazz, encoding, &out->vna_other)
+        || read_Word(data, off_p, clazz, encoding, &out->vna_name)
+        || read_Word(data, off_p, clazz, encoding, &out->vna_next);
+}
+
 const char * elf_type_toString(Elf64_Half et)
 {
     switch (et) {

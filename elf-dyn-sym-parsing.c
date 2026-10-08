@@ -1445,7 +1445,7 @@ static int parse_dt_gnu_hash(
         goto err;
     }
 
-    pr_debug("DT_GNU_HASH nbucket: %" PRIu32 ", nchain: %" PRIu32 ", "
+    pr_debug("DT_GNU_HASH nbuckets: %" PRIu32 ", nchain: %" PRIu32 ", "
              "symoffset: %" PRIu32 "\n",
              out->hdr.nbuckets, out->nchain, out->hdr.symoffset);
     out->present = true;
@@ -1867,6 +1867,14 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
 
     if (sht_gnu_hash->sh_link != sht_dynsym_idx) {
         pr_error("SHT_GNU_HASH sh_link doesn't point to the dynsym section\n");
+        ret = 1;
+    }
+
+    const Elf64_Xword gnu_hash_entsize = clazz == ELFCLASS32 ?
+        4 /* 32-bit */ :
+        0 /* 64-bit */;
+    if (sht_gnu_hash->sh_entsize != gnu_hash_entsize) {
+        pr_error("Invalid SHT_GNU_HASH entsize\n");
         ret = 1;
     }
 

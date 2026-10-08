@@ -144,7 +144,7 @@ err:
 
 void * safe_realloc(void **ptr_p, size_t new_n, size_t size)
 {
-    pr_debug("[%s] new_n: %zu, size: %zu\n", __func__, new_n, size);
+    pr_debug("realloc: new_n: %zu, size: %zu\n", new_n, size);
 
     if (size == 0 || new_n == 0) {
         pr_error("[%s] Invalid new size (0)\n", __func__);

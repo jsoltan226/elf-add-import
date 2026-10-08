@@ -141,6 +141,8 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
                                      Elf64_Addr addr, Elf64_Off off,
                                      Elf64_Xword size, elf_idx_t *out);
 
+static int parse_ver(void);
+
 int parse_dyn(
         const struct blob *data, int clazz, int encoding,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
@@ -567,4 +569,3 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
 
     return ret;
 }
-

@@ -371,6 +371,39 @@ struct elf {
             bool present;
 
             /**
+             * A flag indicating that the table is the special case
+             * "empty" table, that is, there are no hashed symbols.
+             * Such a table has:
+             *  `nbuckets == 1`,
+             *  `symoffset` either set to 1 (GNU bfd ld)
+             *      or the "correct" value - equal to the number
+             *      of unhashed symbols (LLVM lld & GNU gold),
+             *  `bloom_size == 1`, `bloom_shift == 0`,
+             *  1 empty bloom filter word set to 0.
+             *  1 empty bucket set to 0.
+             */
+            bool is_canonically_empty;
+
+            /**
+             * A flag indicating that the count of dynamic symbols
+             * is ambiguous - the table `is_canonically_empty`
+             * and `hdr.symoffset` is 1.
+             *
+             * This flag exists because some versions of GNU bfd ld
+             * incorrectly always emit `symoffset == 1` when there are
+             * no symbols to hash, i.e. there are no exported symbols.
+             *
+             * This is problematic because when there exist non-hashed
+             * (e.g. imported) symbols, but no exported ones,
+             * the total count of them can't be determined
+             * from the GNU hash table alone.
+             *
+             * In some cases, this might make it literally impossible
+             * to certainly determine the number of dynamic symbols.
+             */
+            bool sym_count_ambiguous;
+
+            /**
              * Virtual address of the hash table header and contents;
              * the value of `DT_GNU_HASH`.
              */

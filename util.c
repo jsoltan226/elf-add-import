@@ -345,6 +345,11 @@ int find_unique_dyn_entries(
         const Elf64_Sxword *tags /* [count] */, elf_idx_t *out /* [count] */
 )
 {
+    if (count < 1 || tags == NULL || out == NULL || entries == NULL) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
     bool ok = true;
     bool all_missing = true;
 

@@ -93,6 +93,8 @@ static int find_symtab(const struct elf_dyn_entries *entries, int clazz,
  *
  * @param[out] out_dynsym_count Output pointer for the number of dynamic symbols
  *  inferred from the hash tables' contents. Must not be NULL.
+ *  If this value couldn't be computed (due to missing info in DT_GNU_HASH),
+ *  it is set to `0`.
  *
  * @return 0 on success (one or both hash tables are found and valid),
  *  non-zero on failure (one or more tables invalid or both missing).
@@ -464,8 +466,8 @@ static int read_gnu_hash_chain(
  * Tries to find a `SHT_GNU_HASH` section header and validates it if present.
  * Part of `parse_dt_gnu_hash`.
  *
- * Also validates that the SHT_DYNSYM table size matches the value
- * derived from the DT_GNU_HASH data.
+ * Also, if possible, validates that the SHT_DYNSYM table size
+ * matches the value derived from the DT_GNU_HASH data.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
  *
@@ -884,7 +886,8 @@ int parse_dynsym(
     sht_dynsym_idx = find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
 
     /* Now, since there's no way to directly get the size of the symtab,
-     * we must infer it from the DT_HASH and/or DT_GNU_HASH structure(s).
+     * we must infer it from the DT_HASH and/or DT_GNU_HASH structure(s)
+     * and even then, sometimes we just can't lmao.
      * What a great spec... */
     if (parse_dynamic_hash_tables(data, clazz, encoding, phdrs, shdrs, entries,
                                   sht_dynsym_idx, out_hash, out_gnu_hash,
@@ -893,6 +896,24 @@ int parse_dynsym(
         pr_error("Invalid or missing dynamic hash table(s)\n");
         goto err;
     }
+    if (nsyms == 0) {
+        /* The total number of dynamic symbols couldn't be inferred
+         * from the hash tables' . Will try whatever we can. */
+        symtab_size = 0;
+
+        /* Try SHT_DYNSYM section header, if it exists */
+        if (sht_dynsym_idx != ELF_IDX_NULL) {
+            nsyms = shdrs->arr[sht_dynsym_idx].sh_size / symentsize;
+            pr_error("WARNING: Symbol count (%" PRIu64 ") inferred from "
+                     "the SHT_DYNSYM section header\n", nsyms);
+        } else {
+            pr_error("No SHT_DYNSYM section header which could help us "
+                     "calculate the number of dynamic symbols\n");
+            pr_error("For now there's nothing we can do :(\n");
+            return -1;
+        }
+    }
+
     if (nsyms > UINT64_MAX / symentsize || nsyms > SIZE_MAX) {
         pr_error("Number of dynamic symbols too large (integer overflow)\n");
         goto err;
@@ -1068,11 +1089,33 @@ static int parse_dynamic_hash_tables(
                                 out_gnu_hash->nchain;
 
     if (sysv_hash_ret == 0 && gnu_hash_ret == 0) {
+        /* Special case: when there are no hashed (exported) symbols,
+         * an "empty" GNU hash table is emitted, and GNU bfd ld
+         * unfortunately sets its `symoffset` to `1` no matter what.
+         * In such case, if we have `DT_HASH`'s `nchain`, we use
+         * that as the authoritative source of the number of symbols,
+         * ignoring the invalid DT_GNU_HASH `symoffset == 1`.
+         * If DT_HASH doesn't exist, though, we're cooked :( */
         if (nsyms_sysv_hash != nsyms_gnu_hash) {
-            pr_error("Symbol count from DT_HASH (%" PRIu64 ") "
-                     "doesn't match that from DT_GNU_HASH (%" PRIu64 ")\n",
-                     nsyms_sysv_hash, nsyms_gnu_hash);
-            return 1;
+            if (out_gnu_hash->sym_count_ambiguous) {
+                pr_error("WARNING: Symbol count from DT_GNU_HASH is ambiguous, "
+                         "falling back to the DT_HASH header's `nchain`\n");
+                nsyms_gnu_hash = nsyms_sysv_hash;
+            } else {
+                pr_error("Symbol count from DT_HASH (%" PRIu64 ") "
+                         "doesn't match that from DT_GNU_HASH (%" PRIu64 ")\n",
+                         nsyms_sysv_hash, nsyms_gnu_hash);
+                return 1;
+            }
+        }
+    } else if (sysv_hash_ret != 0 && gnu_hash_ret == 0) {
+        if (out_gnu_hash->sym_count_ambiguous) {
+            pr_error("WARNING: Symbol count from DT_GNU_HASH is ambiguous "
+                     "while DT_HASH is not present; can't compute "
+                     "the count of dynamic symbols from the "
+                     "hash tables' data.\n");
+            *out_dynsym_count = 0;
+            return 0;
         }
     }
 
@@ -1405,22 +1448,41 @@ static int parse_dt_gnu_hash(
         pr_error("Failed to read the DT_GNU_HASH bloom filter and buckets\n");
         goto err;
     }
-
-    if (find_gnu_hash_nchain(data, clazz, encoding, phdrs,
-                             ptload, out, max_bucket, chain_off, &out->nchain))
+    /* Handle the special case "empty" hash table */
+    if (out->hdr.nbuckets == 1 && out->hdr.bloom_size == 1 &&
+        out->buckets[0] == STN_UNDEF && out->bloom[0] == 0)
     {
-        pr_error("Couldn't find the number of entries in the GNU hash chain\n");
-        goto err;
+        pr_debug("GNU hash table is empty\n");
+        out->is_canonically_empty = true;
+        if (out->hdr.symoffset == 1) {
+            pr_error("WARNING: Empty GNU hash has symoffset == 1; "
+                     "total dynsym count is ambiguous. "
+                     "This is most likely due to the ELF being created "
+                     "by a version of GNU ld.bfd which emits this value "
+                     "regardless of the number of unhashed dynamic symbols.\n");
+            out->sym_count_ambiguous = true;
+        }
+    } else {
+        out->is_canonically_empty = false;
+        if (find_gnu_hash_nchain(data, clazz, encoding, phdrs,
+                                 ptload, out, max_bucket, chain_off,
+                                 &out->nchain))
+        {
+            pr_error("Couldn't find the number of entries "
+                     "in the GNU hash chain\n");
+            goto err;
+        }
+
+        if (read_gnu_hash_chain(data, clazz, encoding, chain_off, out->nchain,
+                                &out->chain))
+        {
+            pr_error("Failed to read the GNU hash chain\n");
+            goto err;
+        }
     }
 
-    if (read_gnu_hash_chain(data, clazz, encoding, chain_off, out->nchain,
-                            &out->chain))
-    {
-        pr_error("Failed to read the GNU hash chain\n");
-        goto err;
-    }
 
-    /* max value: (16 + 8 + 4 + 4) * 2^32; doesn't overflow a uint64 */
+    /* max value: 16 + (8 + 4 + 4) * 2^32; doesn't overflow a uint64 */
     out->total_size = (Elf64_Xword)DT_GNU_HASH_HDR_SIZE +
                         ((Elf64_Xword)out->hdr.bloom_size * out->bloomentsize) +
                         ((Elf64_Xword)out->hdr.nbuckets * sizeof(Elf32_Word)) +
@@ -1854,15 +1916,19 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
         ret = 1;
     }
 
-    const size_t symentsize = clazz == ELFCLASS32 ?
-        sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
-    const Elf64_Xword total_symtab_size =
-        ((Elf64_Xword)ctx->hdr.symoffset + ctx->nchain) * symentsize;
-    if (total_symtab_size != sht_dynsym->sh_size) {
-        pr_error("Calculated dynamic symbol table size (0x%" PRIx64 ") "
-                 "doesn't match the dynsym section header (0x%" PRIx64 ")\n",
-                 total_symtab_size, sht_dynsym->sh_size);
-        ret = 1;
+    /* Skip SHT_DYNSYM size check if symbol count can't be determined
+     * due to the GNU bfd ld bug */
+    if (!ctx->sym_count_ambiguous) {
+        const size_t symentsize = clazz == ELFCLASS32 ?
+            sizeof(Elf32_Sym) : sizeof(Elf64_Sym);
+        const Elf64_Xword total_symtab_size =
+            ((Elf64_Xword)ctx->hdr.symoffset + ctx->nchain) * symentsize;
+        if (total_symtab_size != sht_dynsym->sh_size) {
+            pr_error("Calculated dynamic symbol table size (0x%" PRIx64 ") "
+                     "doesn't match the dynsym section header (0x%" PRIx64 ")"
+                     "\n", total_symtab_size, sht_dynsym->sh_size);
+            ret = 1;
+        }
     }
 
     if (sht_gnu_hash->sh_link != sht_dynsym_idx) {
@@ -1874,8 +1940,17 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
         4 /* 32-bit */ :
         0 /* 64-bit */;
     if (sht_gnu_hash->sh_entsize != gnu_hash_entsize) {
-        pr_error("Invalid SHT_GNU_HASH entsize\n");
-        ret = 1;
+        pr_error("Invalid SHT_GNU_HASH entsize "
+                 "(expected %" PRIu64 ", got %" PRIu64 ")\n",
+                 gnu_hash_entsize, sht_gnu_hash->sh_entsize);
+
+        if (sht_gnu_hash->sh_entsize == 0 && clazz == ELFCLASS32) {
+            pr_error("SHT_GNU_HASH sh_entsize is 0 for 32-bit; "
+                     "downgrading to a WARNING because some versions of "
+                     "LLVM lld incorrectly set it like this. :/\n");
+        } else {
+            ret = 1;
+        }
     }
 
     if (!ret)
@@ -2173,8 +2248,23 @@ static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
     const struct elf_dt_gnu_hash_hdr *const hdr = &hash->hdr;
     const Elf32_Word nchain = hash->nchain;
 
-    if (hdr->symoffset > nsyms || nchain != nsyms - hdr->symoffset) {
-        pr_error("Invalid symoffset or nchain value\n");
+    if (hdr->symoffset > nsyms) {
+        pr_error("Symoffset value greater than the count of dynamic symbols\n");
+        return 1;
+    }
+    if (hash->is_canonically_empty) {
+        if (!hash->sym_count_ambiguous && hdr->symoffset != nsyms) {
+            pr_error("Empty GNU hash symoffset doesn't match "
+                    "the dynamic symbol count\n");
+            return 1;
+        }
+        /* `is_canonically_empty` tells us that there's just one empty bucket
+         * and one zeroed bloom word and nothing else,
+         * so we don't have anything more to validate anyways */
+        pr_debug("Empty GNU hash table; skipping any further validation\n");
+        return 0;
+    } else if (nchain != nsyms - hdr->symoffset) {
+        pr_error("Invalid nchain value\n");
         return 1;
     }
 

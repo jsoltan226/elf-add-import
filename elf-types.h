@@ -308,28 +308,6 @@ int write_sym(struct blob *data, uint64_t *off_p,
               int clazz, int encoding, const Elf64_Sym *sym);
 
 /**
- * Parses a symbol table entry to the generic in-memory representation.
- * The fields' values are not validated to be sensible or spec-compliant.
- *
- * @param[in] data The data to read from. Must not be NULL.
- *
- * @param[in,out] off_p A pointer to the offset at which to read.
- *  This value will be incremented to point past the read data.
- *  Must not be NULL.
- *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[out] out Output pointer. Must not be NULL.
- *
- * @return 0 on success, non-zero if the data is outside of buffer bounds.
- */
-int read_sym(const struct blob *data, uint64_t *off_p,
-             int clazz, int encoding, Elf64_Sym *out);
-
-/**
  * Serializes a symbol version definition struct
  * to the given class and data encoding.
  *

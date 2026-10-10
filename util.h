@@ -293,21 +293,43 @@ Elf64_Off find_next_segment_start(const struct elf_phdrs *phdrs, Elf64_Off pos);
  *
  * @param[in] entries The dynamic entries array to search. Must not be NULL.
  *
- * @param[in] count Number of DT_* tags to look for.
+ * @param[in] count Number of DT_* tags to look for. Must be greater than 0.
  *
- * @param[in] tags Array of `count` DT_* tags to be found.
+ * @param[in] tags Array of `count` DT_* tags to be found. Must not be NULL.
  *
  * @param[out] out Array of `count` indices. On success, `out[i]`
  *  contains the index of the entry corresponding to `tags[i]`.
+ *  Must not be NULL.
  *
  * @return 0 on success,
  *  1 if none of the requested DT_* entries are present,
- *  -1 in case of any other failure.
+ *  -1 in case of any other error.
  */
 int find_unique_dyn_entries(
         const struct elf_dyn_entries *entries, size_t count,
         const Elf64_Sxword *tags /* [count] */, elf_idx_t *out /* [count] */
 );
+
+/**
+ * A wrapper for `find_unique_dyn_entries` that just calls it
+ * searching for one DT_* tag at once instead of multiple.
+ *
+ * @param[in] entries The dynamic entries array to search. Must not be NULL.
+ *
+ * @param[in] tag The DT_* tag to look for.
+ *
+ * @param[out] out Output pointer for the index of the found entry.
+ *  Must not be NULL.
+ *
+ * @return 0 on success,
+ *  1 if the requested DT_* entry is not present,
+ *  -1 in case of any other error.
+ */
+static inline int find_unique_dyn_entry(const struct elf_dyn_entries *entries,
+                                        const Elf64_Sxword tag, elf_idx_t *out)
+{
+    return find_unique_dyn_entries(entries, 1, (Elf64_Sxword[]) { tag }, out);
+}
 
 /**
  * Finds the section name by the `sh_name` field of a section header.
@@ -405,6 +427,9 @@ int find_ptload_and_vaddr_from_off(Elf64_Off off, Elf64_Xword size,
     X_(SHT_DYNSYM)                              \
     X_(SHT_HASH)                                \
     X_(SHT_GNU_HASH)                            \
+    X_(SHT_GNU_versym)                          \
+    X_(SHT_GNU_verdef)                          \
+    X_(SHT_GNU_verneed)                         \
 
 /**
  * A list of section header type names (SHT_*)

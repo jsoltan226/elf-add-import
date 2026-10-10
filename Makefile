@@ -8,7 +8,7 @@ ASAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g3
 CFLAGS ?=
 SO_LDFLAGS := -shared
 DEPFLAGS?=-MMD -MP
-LDFLAGS?=-pie -Wl,-hash-style=both
+LDFLAGS?=-Wl,-hash-style=both
 ARFLAGS=rcs
 LIBS?=
 STRIP?=strip -s --strip-section-headers

@@ -1092,6 +1092,9 @@ typedef struct
 #define VER_FLG_WEAK	0x2		/* Weak version identifier.  Also
 					   used by vna_flags below.  */
 
+#define VER_FLG_INFO    0x4     /* Version definition/dependency entry
+                                   is informational only and may be ignored. */
+
 /* Versym symbol index values.  */
 #define	VER_NDX_LOCAL		0	/* Symbol is local.  */
 #define	VER_NDX_GLOBAL		1	/* Symbol is global.  */

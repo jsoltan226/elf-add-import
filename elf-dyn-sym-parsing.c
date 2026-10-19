@@ -570,17 +570,6 @@ static int validate_dynamic_hash_tables(
 );
 
 /**
- * The legacy SysV `DT_HASH` symbol lookup table hash function.
- * Part of `validate_sysv_hash`.
- *
- * @param[in] name The NULL-terminated name of the symbol to hash.
- *  Must not be NULL.
- *
- * @return The hash of `name`.
- */
-static inline Elf32_Word sysv_hash(const uint8_t *name);
-
-/**
  * Validates the legacy SysV-style `DT_HASH` symbol name lookup hash table.
  * Part of `validate_dynamic_hash_tables`, which is part of `parse_dynsym`.
  *
@@ -615,17 +604,6 @@ static int validate_sysv_hash(const struct elf_dt_hash *hash,
                               const Elf64_Sym *symtab, Elf64_Xword nsyms,
                               const struct elf_dyn_strtab *strtab,
                               const struct blob *data);
-
-/**
- * The modern GNU `DT_GNU_HASH` symbol lookup table hash function.
- * Part of `validate_gnu_hash`.
- *
- * @param[in] name The NULL-terminated name of the symbol to hash.
- *  Must not be NULL.
- *
- * @return The hash of `name`.
- */
-static inline Elf32_Word gnu_hash(const uint8_t *name);
 
 /**
  * Validates the modern GNU-style `DT_GNU_HASH` symbol name lookup hash table.
@@ -2122,21 +2100,6 @@ static int validate_dynamic_hash_tables(
     return 0;
 }
 
-static inline Elf32_Word sysv_hash(const uint8_t *name)
-{
-    Elf32_Word h = 0;
-    while (*name != '\0') {
-        h = (h << 4) + *name++;
-
-        const Elf32_Word g = h & UINT32_C(0xf0000000);
-        if (g != 0)
-            h ^= g >> 24;
-
-        h &= ~g;
-    }
-
-    return h;
-}
 
 static int validate_sysv_hash(const struct elf_dt_hash *hash,
                               const Elf64_Sym *symtab, Elf64_Xword nsyms,
@@ -2359,18 +2322,6 @@ static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
     }
 
     return 0;
-}
-
-static inline Elf32_Word gnu_hash(const uint8_t *name)
-{
-    Elf32_Word h = 5381;
-
-    while (*name) {
-        h = (h << 5) + h + *name;
-        name++;
-    }
-
-    return h;
 }
 
 static int validate_sht_dynsym_if_exists(

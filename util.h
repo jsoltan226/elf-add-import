@@ -458,4 +458,48 @@ enum shdr_unique_type {
 elf_idx_t find_unique_shdr_by_type(const struct elf_shdrs *shdrs,
                                    enum shdr_unique_type type);
 
+/**
+ * The legacy SysV `DT_HASH` symbol lookup table hash function.
+ *
+ * @param[in] name The NULL-terminated name of the symbol to hash.
+ *  Must not be NULL.
+ *
+ * @return The hash of `name`.
+ */
+static inline Elf32_Word sysv_hash(const uint8_t *name)
+{
+    Elf32_Word h = 0;
+    while (*name != '\0') {
+        h = (h << 4) + *name++;
+
+        const Elf32_Word g = h & UINT32_C(0xf0000000);
+        if (g != 0)
+            h ^= g >> 24;
+
+        h &= ~g;
+    }
+
+    return h;
+}
+
+/**
+ * The modern GNU `DT_GNU_HASH` symbol lookup table hash function.
+ *
+ * @param[in] name The NULL-terminated name of the symbol to hash.
+ *  Must not be NULL.
+ *
+ * @return The hash of `name`.
+ */
+static inline Elf32_Word gnu_hash(const uint8_t *name)
+{
+    Elf32_Word h = 5381;
+
+    while (*name) {
+        h = (h << 5) + h + *name;
+        name++;
+    }
+
+    return h;
+}
+
 #endif /* UTIL_H_ */

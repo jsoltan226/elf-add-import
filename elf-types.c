@@ -727,12 +727,24 @@ int write_verneed(struct blob *data, uint64_t *off_p,
 int read_verneed(const struct blob *data, uint64_t *off_p,
                  int clazz, int encoding, Elf64_Verneed *out)
 {
-    return 0
+    const int ret = 0
         || read_Half(data, off_p, clazz, encoding, &out->vn_version)
         || read_Half(data, off_p, clazz, encoding, &out->vn_cnt)
         || read_Word(data, off_p, clazz, encoding, &out->vn_file)
         || read_Word(data, off_p, clazz, encoding, &out->vn_aux)
         || read_Word(data, off_p, clazz, encoding, &out->vn_next);
+#if 0
+    if (!ret) {
+        pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
+        pr_debug("%s: vn_version: %" PRIu16 "\n", __func__, out->vn_version);
+        pr_debug("%s: vn_cnt: %" PRIu16 "\n", __func__, out->vn_cnt);
+        pr_debug("%s: vn_file: %" PRIu16 "\n", __func__, out->vn_file);
+        pr_debug("%s: vn_aux: %" PRIu16 "\n", __func__, out->vn_aux);
+        pr_debug("%s: vn_next: %" PRIu16 "\n", __func__, out->vn_next);
+    }
+#endif /* 0 */
+
+    return ret;
 }
 
 int write_vernaux(struct blob *data, uint64_t *off_p,
@@ -749,12 +761,24 @@ int write_vernaux(struct blob *data, uint64_t *off_p,
 int read_vernaux(const struct blob *data, uint64_t *off_p,
                  int clazz, int encoding, Elf64_Vernaux *out)
 {
-    return 0
+    const int ret = 0
         || read_Word(data, off_p, clazz, encoding, &out->vna_hash)
         || read_Half(data, off_p, clazz, encoding, &out->vna_flags)
         || read_Half(data, off_p, clazz, encoding, &out->vna_other)
         || read_Word(data, off_p, clazz, encoding, &out->vna_name)
         || read_Word(data, off_p, clazz, encoding, &out->vna_next);
+#if 0
+    if (!ret) {
+        pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
+        pr_debug("%s: vna_hash: %" PRIu16 "\n", __func__, out->vna_hash);
+        pr_debug("%s: vna_flags: %" PRIu16 "\n", __func__, out->vna_flags);
+        pr_debug("%s: vna_other: %" PRIu16 "\n", __func__, out->vna_other);
+        pr_debug("%s: vna_name: %" PRIu16 "\n", __func__, out->vna_name);
+        pr_debug("%s: vna_next: %" PRIu16 "\n", __func__, out->vna_next);
+    }
+#endif /* 0 */
+
+    return ret;
 }
 
 const char * elf_type_toString(Elf64_Half et)
@@ -765,6 +789,11 @@ const char * elf_type_toString(Elf64_Half et)
         case ET_EXEC: return "ET_EXEC";
         case ET_DYN: return "ET_DYN";
         case ET_CORE: return "ET_CORE";
+
+        case ET_SCE_EXEC: return "ET_SCE_EXEC";
+        case ET_SCE_EXEC_ASLR: return "ET_SCE_EXEC_ASLR";
+        case ET_SCE_DYNAMIC: return "ET_SCE_DYNAMIC";
+
         default:
             if (et >= ET_LOOS && et <= ET_HIOS)
                 return "unknown OS-specific ELF";
@@ -789,6 +818,9 @@ const char * program_header_type_toString(Elf64_Word pt)
         case PT_TLS: return "PT_TLS";
         case PT_NUM: return "PT_NUM";
 
+        case PT_SCE_DYNLIBDATA: return "PT_SCE_DYNLIBDATA";
+        case PT_SCE_PROC_PARAM: return "PT_SCE_PROC_PARAM";
+        case PT_SCE_RELRO: return "PT_SCE_RELRO";
         case PT_GNU_EH_FRAME: return "PT_GNU_EH_FRAME";
         case PT_GNU_STACK: return "PT_GNU_STACK";
         case PT_GNU_RELRO: return "PT_GNU_RELRO";
@@ -797,6 +829,36 @@ const char * program_header_type_toString(Elf64_Word pt)
 
         case PT_SUNWBSS: return "PT_SUNWBSS";
         case PT_SUNWSTACK: return "PT_SUNWSTACK";
+
+        case PT_ARM_EXIDX: return "PT_ARM_EXIDX";
+        case PT_AARCH64_MEMTAG_MTE: return "PT_AARCH64_MEMTAG_MTE";
+        case PT_RISCV_ATTRIBUTES: return "PT_RISCV_ATTRIBUTES";
+        case PT_MIPS_REGINFO: return "PT_MIPS_REGINFO";
+        /* case PT_MIPS_RTPROC: return "PT_MIPS_RTPROC"; */
+        /* case PT_MIPS_OPTIONS: return "PT_MIPS_OPTIONS"; */
+        /* case PT_MIPS_ABIFLAGS: return "PT_MIPS_ABIFLAGS"; */
+        case PT_HP_TLS: return "PT_HP_TLS";
+        case PT_HP_CORE_NONE: return "PT_HP_CORE_NONE";
+        case PT_HP_CORE_VERSION: return "PT_HP_CORE_VERSION";
+        case PT_HP_CORE_KERNEL: return "PT_HP_CORE_KERNEL";
+        case PT_HP_CORE_COMM: return "PT_HP_CORE_COMM";
+        case PT_HP_CORE_PROC: return "PT_HP_CORE_PROC";
+        case PT_HP_CORE_LOADABLE: return "PT_HP_CORE_LOADABLE";
+        case PT_HP_CORE_STACK: return "PT_HP_CORE_STACK";
+        case PT_HP_CORE_SHM: return "PT_HP_CORE_SHM";
+        case PT_HP_CORE_MMF: return "PT_HP_CORE_MMF";
+        case PT_HP_PARALLEL: return "PT_HP_PARALLEL";
+        case PT_HP_FASTBIND: return "PT_HP_FASTBIND";
+        case PT_HP_OPT_ANNOT: return "PT_HP_OPT_ANNOT";
+        case PT_HP_HSL_ANNOT: return "PT_HP_HSL_ANNOT";
+        case PT_HP_STACK: return "PT_HP_STACK";
+        /* case PT_PARISC_ARCHEXT: return "PT_PARISC_ARCHEXT"; */
+        /* case PT_PARISC_UNWIND: return "PT_PARISC_UNWIND"; */
+        /* case PT_IA_64_ARCHEXT: return "PT_IA_64_ARCHEXT"; */
+        /* case PT_IA_64_UNWIND: return "PT_IA_64_UNWIND"; */
+        /* case PT_IA_64_HP_OPT_ANOT: return "PT_IA_64_HP_OPT_ANOT"; */
+        /* case PT_IA_64_HP_HSL_ANOT: return "PT_IA_64_HP_HSL_ANOT"; */
+        /* case PT_IA_64_HP_STACK: return "PT_IA_64_HP_STACK"; */
 
         default:
            if (pt >= PT_LOSUNW && pt <= PT_HISUNW)
@@ -836,6 +898,10 @@ const char * section_header_type_toString(Elf64_Word sht)
         case SHT_NUM: return "SHT_NUM";
         case SHT_LOOS: return "SHT_LOOS";
 
+        case SHT_ANDROID_REL: return "SHT_ANDROID_REL";
+        case SHT_ANDROID_RELA: return "SHT_ANDROID_RELA";
+        case SHT_ANDROID_RELR: return "SHT_ANDROID_RELR";
+        case SHT_GNU_SFRAME: return "SHT_GNU_SFRAME";
         case SHT_GNU_ATTRIBUTES: return "SHT_GNU_ATTRIBUTES";
         case SHT_GNU_HASH: return "SHT_GNU_HASH";
         case SHT_GNU_LIBLIST: return "SHT_GNU_LIBLIST";
@@ -848,6 +914,62 @@ const char * section_header_type_toString(Elf64_Word sht)
         case SHT_SUNW_COMDAT: return "SHT_SUNW_COMDAT";
         case SHT_SUNW_syminfo: return "SHT_SUNW_syminfo";
 
+        case SHT_ARM_EXIDX: return "SHT_ARM_EXIDX";
+        case SHT_ARM_PREEMPTMAP: return "SHT_ARM_PREEMPTMAP";
+        case SHT_ARM_ATTRIBUTES: return "SHT_ARM_ATTRIBUTES";
+        /* case SHT_X86_64_UNWIND: return "SHT_X86_64_UNWIND"; */
+        /* case SHT_RISCV_ATTRIBUTES: return "SHT_RISCV_ATTRIBUTES"; */
+
+        case SHT_MIPS_LIBLIST: return "SHT_MIPS_LIBLIST";
+        /* case SHT_MIPS_MSYM: return "SHT_MIPS_MSYM"; */
+        /* case SHT_MIPS_CONFLICT: return "SHT_MIPS_CONFLICT"; */
+        /* case SHT_MIPS_GPTAB: return "SHT_MIPS_GPTAB"; */
+        case SHT_MIPS_UCODE: return "SHT_MIPS_UCODE";
+        case SHT_MIPS_DEBUG: return "SHT_MIPS_DEBUG";
+        case SHT_MIPS_REGINFO: return "SHT_MIPS_REGINFO";
+        case SHT_MIPS_PACKAGE: return "SHT_MIPS_PACKAGE";
+        case SHT_MIPS_PACKSYM: return "SHT_MIPS_PACKSYM";
+        case SHT_MIPS_RELD: return "SHT_MIPS_RELD";
+        case SHT_MIPS_IFACE: return "SHT_MIPS_IFACE";
+        case SHT_MIPS_CONTENT: return "SHT_MIPS_CONTENT";
+        case SHT_MIPS_OPTIONS: return "SHT_MIPS_OPTIONS";
+        case SHT_MIPS_SHDR: return "SHT_MIPS_SHDR";
+        case SHT_MIPS_FDESC: return "SHT_MIPS_FDESC";
+        case SHT_MIPS_EXTSYM: return "SHT_MIPS_EXTSYM";
+        case SHT_MIPS_DENSE: return "SHT_MIPS_DENSE";
+        case SHT_MIPS_PDESC: return "SHT_MIPS_PDESC";
+        case SHT_MIPS_LOCSYM: return "SHT_MIPS_LOCSYM";
+        case SHT_MIPS_AUXSYM: return "SHT_MIPS_AUXSYM";
+        case SHT_MIPS_OPTSYM: return "SHT_MIPS_OPTSYM";
+        case SHT_MIPS_LOCSTR: return "SHT_MIPS_LOCSTR";
+        case SHT_MIPS_LINE: return "SHT_MIPS_LINE";
+        case SHT_MIPS_RFDESC: return "SHT_MIPS_RFDESC";
+        case SHT_MIPS_DELTASYM: return "SHT_MIPS_DELTASYM";
+        case SHT_MIPS_DELTAINST: return "SHT_MIPS_DELTAINST";
+        case SHT_MIPS_DELTACLASS: return "SHT_MIPS_DELTACLASS";
+        case SHT_MIPS_DWARF: return "SHT_MIPS_DWARF";
+        case SHT_MIPS_DELTADECL: return "SHT_MIPS_DELTADECL";
+        case SHT_MIPS_SYMBOL_LIB: return "SHT_MIPS_SYMBOL_LIB";
+        case SHT_MIPS_EVENTS: return "SHT_MIPS_EVENTS";
+        case SHT_MIPS_TRANSLATE: return "SHT_MIPS_TRANSLATE";
+        case SHT_MIPS_PIXIE: return "SHT_MIPS_PIXIE";
+        case SHT_MIPS_XLATE: return "SHT_MIPS_XLATE";
+        case SHT_MIPS_XLATE_DEBUG: return "SHT_MIPS_XLATE_DEBUG";
+        case SHT_MIPS_WHIRL: return "SHT_MIPS_WHIRL";
+        case SHT_MIPS_EH_REGION: return "SHT_MIPS_EH_REGION";
+        case SHT_MIPS_XLATE_OLD: return "SHT_MIPS_XLATE_OLD";
+        case SHT_MIPS_PDR_EXCEPTION: return "SHT_MIPS_PDR_EXCEPTION";
+        case SHT_MIPS_ABIFLAGS: return "SHT_MIPS_ABIFLAGS";
+        case SHT_MIPS_XHASH: return "SHT_MIPS_XHASH";
+        /* case SHT_PARISC_EXT: return "SHT_PARISC_EXT"; */
+        /* case SHT_PARISC_UNWIND: return "SHT_PARISC_UNWIND"; */
+        /* case SHT_PARISC_DOC: return "SHT_PARISC_DOC"; */
+        /* case SHT_ALPHA_DEBUG: return "SHT_ALPHA_DEBUG"; */
+        /* case SHT_ALPHA_REGINFO: return "SHT_ALPHA_REGINFO"; */
+        /* case SHT_CSKY_ATTRIBUTES: return "SHT_CSKY_ATTRIBUTES"; */
+        /* case SHT_IA_64_EXT: return "SHT_IA_64_EXT"; */
+        /* case SHT_IA_64_UNWIND: return "SHT_IA_64_UNWIND"; */
+        /* case SHT_ARC_ATTRIBUTES: return "SHT_ARC_ATTRIBUTES"; */
 
         default:
             if (sht >= SHT_LOSUNW && sht <= SHT_HISUNW)
@@ -906,6 +1028,14 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
         case DT_RELR: return "DT_RELR";
         case DT_RELRENT: return "DT_RELRENT";
 
+        case DT_ANDROID_REL: return "DT_ANDROID_REL";
+        case DT_ANDROID_RELSZ: return "DT_ANDROID_RELSZ";
+        case DT_ANDROID_RELA: return "DT_ANDROID_RELA";
+        case DT_ANDROID_RELASZ: return "DT_ANDROID_RELASZ";
+        case DT_ANDROID_RELR: return "DT_ANDROID_RELR";
+        case DT_ANDROID_RELRSZ: return "DT_ANDROID_RELSZ";
+        case DT_ANDROID_RELRENT: return "DT_ANDROID_RELRENT";
+        case DT_ANDROID_RELRCOUNT: return "DT_ANDROID_RELRCOUNT";
         case DT_GNU_PRELINKED: return "DT_GNU_PRELINKED";
         case DT_GNU_CONFLICTSZ: return "DT_GNU_CONFLICTSZ";
         case DT_GNU_LIBLISTSZ: return "DT_GNU_LIBLISTSZ";
@@ -917,6 +1047,33 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
         case DT_POSFLAG_1: return "DT_POSFLAG_1";
         case DT_SYMINSZ: return "DT_SYMINSZ";
         case DT_SYMINENT: return "DT_SYMINENT";
+        case DT_SCE_FINGERPRINT: return "DT_SCE_FINGERPRINT";
+        case DT_SCE_FILENAME: return "DT_SCE_FILENAME";
+        case DT_SCE_MODULE_INFO: return "DT_SCE_MODULE_INFO";
+        case DT_SCE_NEEDED_MODULE: return "DT_SCE_NEEDED_MODULE";
+        case DT_SCE_MODULE_ATTR: return "DT_SCE_MODULE_ATTR";
+        case DT_SCE_EXPORT_LIB: return "DT_SCE_EXPORT_LIB";
+        case DT_SCE_IMPORT_LIB: return "DT_SCE_IMPORT_LIB";
+        case DT_SCE_EXPORT_LIB_ATTR: return "DT_SCE_EXPORT_LIB_ATTR";
+        case DT_SCE_IMPORT_LIB_ATTR: return "DT_SCE_IMPORT_LIB_ATTR";
+        case DT_SCE_STUB_MODULE_NAME: return "DT_SCE_STUB_MODULE_NAME";
+        case DT_SCE_STUB_MODULE_VER: return "DT_SCE_STUB_MODULE_VER";
+        case DT_SCE_STUB_LIBRARY_NAME: return "DT_SCE_STUB_LIBRARY_NAME";
+        case DT_SCE_STUB_LIBRARY_VER: return "DT_SCE_STUB_LIBRARY_VER";
+        case DT_SCE_HASH: return "DT_SCE_HASH";
+        case DT_SCE_PLTGOT: return "DT_SCE_PLTGOT";
+        case DT_SCE_JMPREL: return "DT_SCE_JMPREL";
+        case DT_SCE_PLTREL: return "DT_SCE_PLTREL";
+        case DT_SCE_PLTRELSZ: return "DT_SCE_PLTRELSZ";
+        case DT_SCE_RELA: return "DT_SCE_RELA";
+        case DT_SCE_RELASZ: return "DT_SCE_RELASZ";
+        case DT_SCE_RELAENT: return "DT_SCE_RELAENT";
+        case DT_SCE_STRTAB: return "DT_SCE_STRTAB";
+        case DT_SCE_STRSZ: return "DT_SCE_STRSZ";
+        case DT_SCE_SYMTAB: return "DT_SCE_SYMTAB";
+        case DT_SCE_SYMENT: return "DT_SCE_SYMENT";
+        case DT_SCE_HASHSZ: return "DT_SCE_HASHSZ";
+        case DT_SCE_SYMTABSZ: return "DT_SCE_SYMTABSZ";
 
         case DT_GNU_HASH: return "DT_GNU_HASH";
         case DT_TLSDESC_PLT: return "DT_TLSDESC_PLT";
@@ -942,6 +1099,77 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
 
         case DT_AUXILIARY: return "DT_AUXILIARY";
         case DT_FILTER: return "DT_FILTER";
+
+        case DT_AARCH64_MEMTAG_MODE: return "DT_AARCH64_MEMTAG_MODE";
+        case DT_AARCH64_MEMTAG_HEAP: return "DT_AARCH64_MEMTAG_HEAP";
+        case DT_AARCH64_MEMTAG_STACK: return "DT_AARCH64_MEMTAG_STACK";
+        case DT_AARCH64_MEMTAG_GLOBALS: return "DT_AARCH64_MEMTAG_GLOBALS";
+        case DT_AARCH64_MEMTAG_GLOBALSSZ: return "DT_AARCH64_MEMTAG_GLOBALSSZ";
+        case DT_AARCH64_BTI_PLT: return "DT_AARCH64_BTI_PLT";
+        case DT_AARCH64_PAC_PLT: return "DT_AARCH64_PAC_PLT";
+        case DT_AARCH64_VARIANT_PCS: return "DT_AARCH64_VARIANT_PCS";
+        case DT_X86_64_PLT: return "DT_X86_64_PLT";
+        /* case DT_X86_64_PLTSZ: return "DT_X86_64_PLTSZ"; */
+        /* case DT_X86_64_PLTENT: return "DT_X86_64_PLTENT"; */
+        /* case DT_RISCV_VARIANT_CC: return "DT_RISCV_VARIANT_CC"; */
+        /* case DT_SPARC_REGISTER: return "DT_SPARC_REGISTER"; */
+        /* case DT_MIPS_RLD_VERSION: return "DT_MIPS_RLD_VERSION"; */
+        /* case DT_MIPS_TIME_STAMP: return "DT_MIPS_TIME_STAMP"; */
+        /* case DT_MIPS_ICHECKSUM: return "DT_MIPS_ICHECKSUM"; */
+        case DT_MIPS_IVERSION: return "DT_MIPS_IVERSION";
+        /* case DT_MIPS_FLAGS: return "DT_MIPS_FLAGS"; */
+        case DT_MIPS_BASE_ADDRESS: return "DT_MIPS_BASE_ADDRESS";
+        case DT_MIPS_MSYM: return "DT_MIPS_MSYM";
+        case DT_MIPS_CONFLICT: return "DT_MIPS_CONFLICT";
+        /* case DT_MIPS_LIBLIST: return "DT_MIPS_LIBLIST"; */
+        case DT_MIPS_LOCAL_GOTNO: return "DT_MIPS_LOCAL_GOTNO";
+        /* case DT_MIPS_CONFLICTNO: return "DT_MIPS_CONFLICTNO"; */
+        case DT_MIPS_LIBLISTNO: return "DT_MIPS_LIBLISTNO";
+        case DT_MIPS_SYMTABNO: return "DT_MIPS_SYMTABNO";
+        case DT_MIPS_UNREFEXTNO: return "DT_MIPS_UNREFEXTNO";
+        case DT_MIPS_GOTSYM: return "DT_MIPS_GOTSYM";
+        case DT_MIPS_HIPAGENO: return "DT_MIPS_HIPAGENO";
+        case DT_MIPS_RLD_MAP: return "DT_MIPS_RLD_MAP";
+        case DT_MIPS_DELTA_CLASS: return "DT_MIPS_DELTA_CLASS";
+        case DT_MIPS_DELTA_CLASS_NO: return "DT_MIPS_DELTA_CLASS_NO";
+        case DT_MIPS_DELTA_INSTANCE: return "DT_MIPS_DELTA_INSTANCE";
+        case DT_MIPS_DELTA_INSTANCE_NO: return "DT_MIPS_DELTA_INSTANCE_NO";
+        case DT_MIPS_DELTA_RELOC: return "DT_MIPS_DELTA_RELOC";
+        case DT_MIPS_DELTA_RELOC_NO: return "DT_MIPS_DELTA_RELOC_NO";
+        case DT_MIPS_DELTA_SYM: return "DT_MIPS_DELTA_SYM";
+        case DT_MIPS_DELTA_SYM_NO: return "DT_MIPS_DELTA_SYM_NO";
+        case DT_MIPS_DELTA_CLASSSYM: return "DT_MIPS_DELTA_CLASSSYM";
+        case DT_MIPS_DELTA_CLASSSYM_NO: return "DT_MIPS_DELTA_CLASSSYM_NO";
+        case DT_MIPS_CXX_FLAGS: return "DT_MIPS_CXX_FLAGS";
+        case DT_MIPS_PIXIE_INIT: return "DT_MIPS_PIXIE_INIT";
+        case DT_MIPS_SYMBOL_LIB: return "DT_MIPS_SYMBOL_LIB";
+        case DT_MIPS_LOCALPAGE_GOTIDX: return "DT_MIPS_LOCALPAGE_GOTIDX";
+        case DT_MIPS_LOCAL_GOTIDX: return "DT_MIPS_LOCAL_GOTIDX";
+        case DT_MIPS_HIDDEN_GOTIDX: return "DT_MIPS_HIDDEN_GOTIDX";
+        case DT_MIPS_PROTECTED_GOTIDX: return "DT_MIPS_PROTECTED_GOTIDX";
+        case DT_MIPS_OPTIONS: return "DT_MIPS_OPTIONS";
+        case DT_MIPS_INTERFACE: return "DT_MIPS_INTERFACE";
+        case DT_MIPS_DYNSTR_ALIGN: return "DT_MIPS_DYNSTR_ALIGN";
+        case DT_MIPS_INTERFACE_SIZE: return "DT_MIPS_INTERFACE_SIZE";
+        case DT_MIPS_RLD_TEXT_RESOLVE_ADDR:
+            return "DT_MIPS_RLD_TEXT_RESOLVE_ADDR";
+        case DT_MIPS_PERF_SUFFIX: return "DT_MIPS_PERF_SUFFIX";
+        case DT_MIPS_COMPACT_SIZE: return "DT_MIPS_COMPACT_SIZE";
+        case DT_MIPS_GP_VALUE: return "DT_MIPS_GP_VALUE";
+        case DT_MIPS_AUX_DYNAMIC: return "DT_MIPS_AUX_DYNAMIC";
+        case DT_MIPS_PLTGOT: return "DT_MIPS_PLTGOT";
+        case DT_MIPS_RWPLT: return "DT_MIPS_RWPLT";
+        case DT_MIPS_RLD_MAP_REL: return "DT_MIPS_RLD_MAP_REL";
+        case DT_MIPS_XHASH: return "DT_MIPS_XHASH";
+        /* case DT_ALPHA_PLTRO: return "DT_ALPHA_PLTRO"; */
+        /* case DT_PPC_GOT: return "DT_PPC_GOT"; */
+        /* case DT_PPC_OPT: return "DT_PPC_OPT"; */
+        /* case DT_PPC64_GLINK: return "DT_PPC64_GLINK"; */
+        /* case DT_PPC64_OPD: return "DT_PPC64_OPD"; */
+        case DT_PPC64_OPDSZ: return "DT_PPC64_OPDSZ";
+        /* case DT_PPC64_OPT: return "DT_PPC64_OPT"; */
+        /* case DT_IA_64_PLT_RESERVE: return "DT_IA_64_PLT_RESERVE"; */
+        /* case DT_NIOS2_GP: return "DT_NIOS2_GP"; */
 
         default:
             if (dt >= DT_LOOS && dt <= DT_HIOS)

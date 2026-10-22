@@ -4,6 +4,7 @@
 #include "elf-types.h"
 #include "elf-parsing.h"
 #include "elf-patching.h"
+#include "elf-dyn-sym-ver-parsing.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -491,6 +492,13 @@ int main(int argc, char **argv)
                      "of the file, it might be already patched!\n");
         }
         list_sections(&elf);
+
+        if (parse_ver(&elf.phdrs, &elf.shdrs, &elf.dyn.strtab,
+                      &elf.dyn.entries, &elf.data, elf.ident.clazz, elf.ident.data))
+        {
+            pr_error("parse_ver has failed\n");
+            /* goto err; */
+        }
     }
 
     /** Modify the ELF **/

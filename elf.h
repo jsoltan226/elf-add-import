@@ -18,7 +18,8 @@
 
 /**
  * @file The `elf.h` header file containing the ELF type, struct and enum
- *  definitions. Copied from glibc.
+ *  definitions. Copied from glibc. Some definitions were taken from other
+ *  compatible sources, like LLVM, Bionic and OpenOrbis.
  */
 
 #ifndef ELF_ADD_IMPORT_ELF_H_
@@ -167,6 +168,9 @@ typedef struct
 #define ET_CORE		4		/* Core file */
 #define	ET_NUM		5		/* Number of defined types */
 #define ET_LOOS		0xfe00		/* OS-specific range start */
+#define ET_SCE_EXEC 0xfe00  /* Sony Orbis executable file */
+#define ET_SCE_EXEC_ASLR 0xfe10 /* Sony Orbis executable, loaded with ASLR */
+#define ET_SCE_DYNAMIC 0xfe18   /* Sony Orbis dynamic shared object file */
 #define ET_HIOS		0xfeff		/* OS-specific range end */
 #define ET_LOPROC	0xff00		/* Processor-specific range start */
 #define ET_HIPROC	0xffff		/* Processor-specific range end */
@@ -452,6 +456,13 @@ typedef struct
 #define SHT_RELR	  19            /* RELR relative relocations */
 #define	SHT_NUM		  20		/* Number of defined types.  */
 #define SHT_LOOS	  0x60000000	/* Start OS-specific.  */
+#define SHT_ANDROID_REL     0x60000001 /* Android packed relocation entries */
+#define SHT_ANDROID_RELA    0x60000002 /* Android packed relocation entries
+                                          with addends */
+#define SHT_ANDROID_RELR    0x6fffff00  /* Android's experimental support for
+                                           SHT_RELR sections; later replaced
+                                           by SHT_RELR. */
+#define SHT_GNU_SFRAME  0x6ffffff4  /* GNU Sframe stack trace format. */
 #define SHT_GNU_ATTRIBUTES 0x6ffffff5	/* Object attributes.  */
 #define SHT_GNU_HASH	  0x6ffffff6	/* GNU-style hash table.  */
 #define SHT_GNU_LIBLIST	  0x6ffffff7	/* Prelink library list */
@@ -729,6 +740,9 @@ typedef struct
 #define PT_TLS		7		/* Thread-local storage segment */
 #define	PT_NUM		8		/* Number of defined types */
 #define PT_LOOS		0x60000000	/* Start of OS-specific */
+#define PT_SCE_DYNLIBDATA 0x61000000 /* Sony Orbis dynamic linking data */
+#define PT_SCE_PROC_PARAM 0x61000001 /* Sony Orbis process parameters */
+#define PT_SCE_RELRO 0x61000010 /* Sony Orbis read-only relocations segment */
 #define PT_GNU_EH_FRAME	0x6474e550	/* GCC .eh_frame_hdr segment */
 #define PT_GNU_STACK	0x6474e551	/* Indicates stack executability */
 #define PT_GNU_RELRO	0x6474e552	/* Read-only after relocation */
@@ -934,8 +948,68 @@ typedef struct
 #define DT_RELRENT	37		/* Size of one RELR relative relocation */
 #define	DT_NUM		38		/* Number used */
 #define DT_LOOS		0x6000000d	/* Start of OS-specific */
+
+/**
+ * Android packed relocation section tags,
+ * eventually replaced by DT_ANDROID_RELR*, which was then superseded by
+ * the standard RELR* relocations
+ * https://android.googlesource.com/platform/bionic/+/6f12bfece5dcc01325e0abba56a46b1bcf991c69/tools/relocation_packer/src/elf_file.cc#31
+ */
+#define DT_ANDROID_REL      0x6000000f  /* Address of packed relocation table */
+#define DT_ANDROID_RELSZ    0x60000010  /* Size of packed relocation table. */
+#define DT_ANDROID_RELA     0x60000011  /* Address of packed RELA table. */
+#define DT_ANDROID_RELASZ   0x60000012  /* Size of packed RELA table. */
+
+/**
+ * Android's experimental support for RELR sections,
+ * eventually replaced by standard RELR* relocations
+ * https://android.googlesource.com/platform/bionic/+/b7feec74547f84559a1467aca02708ff61346d2a/libc/include/elf.h#253
+ */
+#define DT_ANDROID_RELR     0x6fffe000  /* Address of RELR relocation table. */
+#define DT_ANDROID_RELRSZ   0x6fffe001  /* Size of RELR relocation table. */
+#define DT_ANDROID_RELRENT  0x6fffe003  /* Size of a RELR relocation entry. */
+#define DT_ANDROID_RELRCOUNT    0x6fffe005  /* Number of RELR relocation
+                                               entries. */
+
+/* Sony Orbis-specific DT_* tags */
+#define DT_SCE_FINGERPRINT 	0x61000007
+#define DT_SCE_FILENAME 	0x61000009
+#define DT_SCE_MODULE_INFO 	0x6100000D
+#define DT_SCE_NEEDED_MODULE 	0x6100000F
+#define DT_SCE_MODULE_ATTR 	0x61000011
+#define DT_SCE_EXPORT_LIB 	0x61000013
+#define DT_SCE_IMPORT_LIB 	0x61000015
+#define DT_SCE_EXPORT_LIB_ATTR 	0x61000017
+#define DT_SCE_IMPORT_LIB_ATTR 	0x61000019
+#define DT_SCE_STUB_MODULE_NAME 	0x6100001D
+#define DT_SCE_STUB_MODULE_VER 	0x6100001F
+#define DT_SCE_STUB_LIBRARY_NAME 	0x61000021
+#define DT_SCE_STUB_LIBRARY_VER 	0x61000023
+#define DT_SCE_HASH 	0x61000025
+#define DT_SCE_PLTGOT 	0x61000027
+#define DT_SCE_JMPREL 	0x61000029
+#define DT_SCE_PLTREL 	0x6100002B
+#define DT_SCE_PLTRELSZ 	0x6100002D
+#define DT_SCE_RELA 	0x6100002F
+#define DT_SCE_RELASZ 	0x61000031
+#define DT_SCE_RELAENT 	0x61000033
+#define DT_SCE_STRTAB 	0x61000035
+#define DT_SCE_STRSZ 	0x61000037
+#define DT_SCE_SYMTAB 	0x61000039
+#define DT_SCE_SYMENT 	0x6100003B
+#define DT_SCE_HASHSZ 	0x6100003D
+#define DT_SCE_SYMTABSZ 	0x6100003F
+
 #define DT_HIOS		0x6ffff000	/* End of OS-specific */
 #define DT_LOPROC	0x70000000	/* Start of processor-specific */
+
+/* AArch64 MTE-related tags */
+#define DT_AARCH64_MEMTAG_MODE 0x70000009
+#define DT_AARCH64_MEMTAG_HEAP 0x7000000b
+#define DT_AARCH64_MEMTAG_STACK 0x7000000c
+#define DT_AARCH64_MEMTAG_GLOBALS 0x7000000d
+#define DT_AARCH64_MEMTAG_GLOBALSSZ 0x7000000f
+
 #define DT_HIPROC	0x7fffffff	/* End of processor-specific */
 #define	DT_PROCNUM	DT_MIPS_NUM	/* Most used by any processor */
 

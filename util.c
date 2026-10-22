@@ -360,11 +360,11 @@ int find_unique_dyn_entries(
         const Elf64_Sxword t = entries->arr[i].d_tag;
         for (size_t j = 0; j < count; j++) {
             if (t == tags[j]) {
+                all_missing = false;
                 if (out[j] != ELF_IDX_NULL) {
                     pr_error("Duplicate dynamic entry %" PRIi64 " (%s)\n",
                              t, dynamic_tag_to_string(t));
                     ok = false;
-                    all_missing = false;
                 }
                 out[j] = i;
                 break;

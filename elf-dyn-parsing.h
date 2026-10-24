@@ -21,10 +21,6 @@
  *
  * @param[in] data The ELF file data. Must not be NULL.
  *
- * @param[in] clazz The ELF file class (ELFCLASS32 or ELFCLASS64).
- *
- * @param[in] encoding The ELF file data encoding (ELFDATA2MSB or ELFDATA2LSB).
- *
  * @param[in] phdrs Array of parsed and validated program headers.
  *  Must not be NULL.
  *
@@ -47,12 +43,10 @@
  * @return 0 on success, non-zero if the dynamic linking data is
  *  absent or malformed.
  */
-int parse_dyn(
-        const struct blob *data, int clazz, int encoding,
-        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+int parse_dyn(const ElfFileData *data,
+              const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
 
-        struct elf_dynamic *out,
-        Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize
-);
+              struct elf_dynamic *out,
+              Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize);
 
 #endif /* ELF_DYN_PARSING_H_ */

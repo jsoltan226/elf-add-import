@@ -474,9 +474,9 @@ int update_dyn_symtab_off(struct elf *elf, Elf64_Off new_off)
     return 0;
 }
 
-int serialize_arr(struct blob *data, serializer_proc_t serializer,
+int serialize_arr(ElfFileData *data, serializer_proc_t serializer,
                   const void *arr, size_t mementsize, Elf64_Half fileentsize,
-                  uint64_t off, Elf64_Xword size, int clazz, int encoding)
+                  Elf64_Off off, Elf64_Xword size)
 {
     if (mementsize == 0 || fileentsize == 0) {
         pr_error("Element size is 0\n");
@@ -492,9 +492,9 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
         pr_error("Invalid element count (integer overflow)\n");
         return -1;
     }
-    const uint64_t filesize = size * fileentsize;
+    const Elf64_Off filesize = size * fileentsize;
 
-    const uint64_t start = off;
+    const Elf64_Off start = off;
     if (filesize > UINT64_MAX - start) {
         pr_error("Invalid offset (integer overflow)\n");
         return -1;
@@ -511,7 +511,7 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
 
     for (Elf64_Xword i = 0; i < size; i++) {
         const void *ptr = (const uint8_t *)arr + (i * mementsize);
-        if (serializer(data, &off, clazz, encoding, ptr)) {
+        if (serializer(data, &off, ptr)) {
             pr_error("Failed to serialize element no %" PRIu64 "\n", i);
             return 1;
         }
@@ -531,40 +531,38 @@ int serialize_arr(struct blob *data, serializer_proc_t serializer,
  * Wrapper for `write_phdr`, used to suppress the
  * incompatible function pointer types warning in `serialize_elf`.
  */
-static inline int write_phdr_wrapper(struct blob *data, uint64_t *off_p,
-                                     int clazz, int encoding, const void *arr)
+static inline int write_phdr_wrapper(ElfFileData *data, Elf64_Off *off_p,
+                                     const void *arr)
 {
-    return write_phdr(data, off_p, clazz, encoding, (const Elf64_Phdr *)arr);
+    return write_phdr(data, off_p, (const Elf64_Phdr *)arr);
 }
 
 /**
  * Wrapper for `write_shdr`, used to suppress the
  * incompatible function pointer types warning in `serialize_elf`.
  */
-static inline int write_shdr_wrapper(struct blob *data, uint64_t *off_p,
-                                     int clazz, int encoding, const void *arr)
+static inline int write_shdr_wrapper(ElfFileData *data, Elf64_Off *off_p,
+                                     const void *arr)
 {
-    return write_shdr(data, off_p, clazz, encoding, (const Elf64_Shdr *)arr);
+    return write_shdr(data, off_p, (const Elf64_Shdr *)arr);
 }
 
 /**
  * Wrapper for `write_dyn`, used to suppress the
  * incompatible function pointer types warning in `serialize_elf`.
  */
-static inline int write_dyn_wrapper(struct blob *data, uint64_t *off_p,
-                                    int clazz, int encoding, const void *arr)
+static inline int write_dyn_wrapper(ElfFileData *data, Elf64_Off *off_p,
+                                    const void *arr)
 {
-    return write_dyn(data, off_p, clazz, encoding, (const Elf64_Dyn *)arr);
+    return write_dyn(data, off_p, (const Elf64_Dyn *)arr);
 }
 
 int serialize_elf(struct elf *elf, bool reset_dirty_flags)
 {
-    const int c = elf->ident.clazz, d = elf->ident.data;
-
     pr_debug("ELF header dirty: %d\n", !!elf->ehdr_dirty);
     if (elf->ehdr_dirty) {
-        uint64_t off = 0;
-        if (write_ehdr(&elf->data, &off, c, d, &elf->ehdr)) {
+        Elf64_Off off = 0;
+        if (write_ehdr(&elf->data, &off, &elf->ehdr)) {
             pr_error("Failed to rewrite the ELF header\n");
             return 1;
         }
@@ -577,7 +575,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
         if (serialize_arr(&elf->data,
                           write_phdr_wrapper, elf->phdrs.arr,
                           sizeof(Elf64_Phdr), elf->phentsize,
-                          elf->ehdr.e_phoff, elf->phdrs.num, c, d))
+                          elf->ehdr.e_phoff, elf->phdrs.num))
         {
             pr_error("Failed to rewrite the program headers\n");
             return 1;
@@ -591,7 +589,7 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
         if (serialize_arr(&elf->data,
                           write_shdr_wrapper, elf->shdrs.arr,
                           sizeof(Elf64_Shdr), elf->shentsize,
-                          elf->ehdr.e_shoff, elf->shdrs.num, c, d))
+                          elf->ehdr.e_shoff, elf->shdrs.num))
         {
             pr_error("Failed to rewrite the section headers\n");
             return 1;
@@ -603,12 +601,12 @@ int serialize_elf(struct elf *elf, bool reset_dirty_flags)
     pr_debug("Dynamic entries dirty: %d\n", !!elf->dyn.entries.dirty);
     if (elf->dyn.entries.dirty) {
         const Elf64_Phdr *const pt_dynamic = get_phdr_ro(elf, elf->dyn.phdr);
-        const Elf64_Half fileentsize =
-            c == ELFCLASS32 ? sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
+        const Elf64_Half fileentsize = elf->ident.clazz == ELFCLASS32 ?
+                                        sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
         if (serialize_arr(&elf->data,
                           write_dyn_wrapper, elf->dyn.entries.arr,
                           sizeof(Elf64_Dyn), fileentsize,
-                          pt_dynamic->p_offset, elf->dyn.entries.num, c, d))
+                          pt_dynamic->p_offset, elf->dyn.entries.num))
         {
             pr_error("Failed to serialize the dynamic entries\n");
             return 1;

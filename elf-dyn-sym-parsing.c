@@ -69,10 +69,6 @@ static int find_symtab(const struct elf_dyn_entries *entries, int clazz,
  *
  * @param[in] data The ELF file data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
@@ -100,7 +96,7 @@ static int find_symtab(const struct elf_dyn_entries *entries, int clazz,
  *  non-zero on failure (one or more tables invalid or both missing).
  */
 static int parse_dynamic_hash_tables(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
 
@@ -114,10 +110,6 @@ static int parse_dynamic_hash_tables(
  * Part of `parse_dynamic_hash_tables`, which is part of `parse_dynsym`.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
@@ -136,7 +128,7 @@ static int parse_dynamic_hash_tables(
  *  negative value if found but malformed.
  */
 static int parse_dt_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
         struct elf_dt_hash *out
@@ -157,10 +149,6 @@ static int parse_dt_hash(
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] entries The dynamic entries array. Must not be NULL.
@@ -172,9 +160,8 @@ static int parse_dt_hash(
  *  negative value if found but malformed.
  */
 static int find_dt_hash(
-        const struct blob *data, int clazz, int encoding,
-        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
-        struct elf_dt_hash *out
+        const ElfFileData *data, const struct elf_phdrs *phdrs,
+        const struct elf_dyn_entries *entries, struct elf_dt_hash *out
 );
 
 /**
@@ -185,10 +172,6 @@ static int find_dt_hash(
  * All temporary resources are freed in case of failure.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in,out] off_p A pointer to the offset at which to read.
  *  This value will be incremented to point past the read data.
@@ -210,7 +193,7 @@ static int find_dt_hash(
  * @return 0 on success, non-zero on failure.
  */
 static int read_dt_hash_contents(
-        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        const ElfFileData *data, Elf64_Off *off_p,
         const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
         Elf32_Word **out_buckets, Elf32_Word **out_chain
 );
@@ -251,10 +234,6 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
@@ -271,23 +250,19 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
  *  negative value if found but malformed.
  */
 static int parse_dt_gnu_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
         struct elf_dt_gnu_hash *out
 );
 
 /**
- * Reads the DT_GNU_HASH structure's header,
- * also validating that the `nbuckets` and `bloom_size` fields
+ * Reads the DT_GNU_HASH structure's header
+ * and validates that the `nbuckets` and `bloom_size` fields
  * are representable as `size_t` (they are later used in allocations).
  * Part of `find_dt_gnu_hash`.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in,out] off_p A pointer to the offset at which to read.
  *  This value will be incremented to point past the read data.
@@ -295,10 +270,8 @@ static int parse_dt_gnu_hash(
  *
  * @param[out] out Output pointer. Must not be NULL.
  */
-static int read_dt_gnu_hash_hdr(
-        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
-        struct elf_dt_gnu_hash_hdr *out
-);
+static int read_dt_gnu_hash_hdr(const ElfFileData *data, Elf64_Off *off_p,
+                                struct elf_dt_gnu_hash_hdr *out);
 
 /**
  * Finds the `DT_GNU_HASH` dynamic entry and based on it,
@@ -318,10 +291,6 @@ static int read_dt_gnu_hash_hdr(
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] entries The dynamic entries array. Must not be NULL.
@@ -337,7 +306,7 @@ static int read_dt_gnu_hash_hdr(
  *  negative value if found but malformed.
  */
 static int find_dt_gnu_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
         struct elf_dt_gnu_hash *out, elf_idx_t *out_pt_load_idx
 );
@@ -358,10 +327,6 @@ static int find_dt_gnu_hash(
  * The rest of the fields are unused.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
@@ -385,7 +350,7 @@ static int find_dt_gnu_hash(
  * @return 0 on success, non-zero on failure.
  */
 static int read_bloom_and_buckets(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, struct elf_dt_gnu_hash *ctx,
         elf_idx_t pt_load_idx, Elf32_Word *out_max_bucket,
         Elf64_Off *out_chain_off
@@ -404,10 +369,6 @@ static int read_bloom_and_buckets(
  * every symbol that the hash table indexes.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
@@ -430,7 +391,7 @@ static int read_bloom_and_buckets(
  *  before reaching the segment bounds.
  */
 static int find_gnu_hash_nchain(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, elf_idx_t containing_phdr_idx,
         const struct elf_dt_gnu_hash *ctx, Elf32_Word max_bucket,
         Elf64_Off chain_off, Elf32_Word *out
@@ -441,10 +402,6 @@ static int find_gnu_hash_nchain(
  * Part of `parse_dt_gnu_hash`.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
  *
  * @param[in] chain_off Offset of the chain array (at which to start reading).
  *  Must be the value obtained from `read_bloom_and_buckets`.
@@ -457,10 +414,8 @@ static int find_gnu_hash_nchain(
  *
  * @return 0 on success, non-zero on failure.
  */
-static int read_gnu_hash_chain(
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Off chain_off, Elf32_Word nchain, Elf32_Word **out
-);
+static int read_gnu_hash_chain(const ElfFileData *data, Elf64_Off chain_off,
+                               Elf32_Word nchain, Elf32_Word **out);
 
 /**
  * Tries to find a `SHT_GNU_HASH` section header and validates it if present.
@@ -503,10 +458,6 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
- *
  * @param[in] tbl_offset Offset of the symtab; the value of `DT_SYMTAB`.
  *
  * @param[in] nsyms Number of dynamic symbols inferred from the
@@ -531,7 +482,7 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
  * @return 0 on success, non-zero on failure.
  */
 static int read_dynamic_symbol_table(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         Elf64_Off tbl_offset, Elf64_Xword nsyms,
         Elf64_Xword dynstr_size, Elf64_Xword n_shdrs,
         Elf64_Sym **out, bool *out_uses_symtab_shndx
@@ -559,14 +510,12 @@ static int read_dynamic_symbol_table(
  *
  * @param[in] nsyms The number of entries in `symtab`.
  *
- * @param[in] clazz The ELF file's class.
- *
  * @return 0 on success, non-zero on failure.
  */
 static int validate_dynamic_hash_tables(
-        const struct blob *data, const struct elf_dyn_strtab *strtab,
+        const ElfFileData *data, const struct elf_dyn_strtab *strtab,
         const struct elf_dt_hash *hash, const struct elf_dt_gnu_hash *gnu_hash,
-        const Elf64_Sym *symtab, Elf64_Xword nsyms, int clazz
+        const Elf64_Sym *symtab, Elf64_Xword nsyms
 );
 
 /**
@@ -603,7 +552,7 @@ static int validate_dynamic_hash_tables(
 static int validate_sysv_hash(const struct elf_dt_hash *hash,
                               const Elf64_Sym *symtab, Elf64_Xword nsyms,
                               const struct elf_dyn_strtab *strtab,
-                              const struct blob *data);
+                              const ElfFileData *data);
 
 /**
  * Validates the modern GNU-style `DT_GNU_HASH` symbol name lookup hash table.
@@ -633,15 +582,13 @@ static int validate_sysv_hash(const struct elf_dt_hash *hash,
  *
  * @param[in] data The ELF file data. Must not be NULL.
  *
- * @param[in] clazz The ELF file's class, used for the bloom filter test.
- *
  * @return 0 on success (hash table valid or not present at all),
  *  non-zero if the table is invalid.
  */
 static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
                              const Elf64_Sym *symtab, Elf64_Xword nsyms,
                              const struct elf_dyn_strtab *strtab,
-                             const struct blob *data, int clazz);
+                             const ElfFileData *data);
 
 /**
  * Validates the `SHT_DYNSYM` (".dynsym") section header, if present.
@@ -699,10 +646,6 @@ static int validate_sht_dynsym_if_exists(
  *
  * @param[in] data The data of the ELF file. Must not be NULL.
  *
- * @param[in] clazz Class of the ELF file.
- *
- * @param[in] encoding Byte order of the ELF file.
- *
  * @param[in] symtab The parsed dynamic symbol table (of count `nsyms`).
  *  Must not be NULL if `nsyms > 0`.
  *
@@ -726,8 +669,8 @@ static int validate_sht_dynsym_if_exists(
 static int parse_dyn_symtab_shndx_if_exists(
         const struct elf_dyn_entries *entries, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Sym *symtab, Elf64_Xword nsyms, bool must_exist,
+        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        bool must_exist,
 
         struct elf_dyn_symtab_shndx *out
 );
@@ -743,10 +686,6 @@ static int parse_dyn_symtab_shndx_if_exists(
  * which means that the values in the array cannot yet be trusted.
  *
  * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz Class of the ELF file.
- *
- * @param[in] encoding Byte order of the ELF file.
  *
  * @param[in] symtab The parsed dynamic symbol table of `nsyms` entries.
  *  Must not be NULL if `nsyms > 0`.
@@ -770,9 +709,8 @@ static int parse_dyn_symtab_shndx_if_exists(
  * @return 0 on success, non-zero on failure.
  */
 static int read_symtab_shndx_contents(
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Sym *symtab, Elf64_Xword nsyms, Elf64_Off start, Elf64_Xword size,
-        const struct elf_shdrs *shdrs,
+        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        Elf64_Off start, Elf64_Xword size, const struct elf_shdrs *shdrs,
         Elf32_Word **out
 );
 
@@ -811,7 +749,7 @@ static int validate_dyn_sht_symtab_shndx_if_exists(
 );
 
 int parse_dynsym(
-    const struct blob *data, int clazz, int encoding,
+    const ElfFileData *data,
     const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
     const struct elf_dyn_entries *entries, const struct elf_dyn_strtab *strtab,
 
@@ -849,7 +787,7 @@ int parse_dynsym(
     bool uses_symtab_shndx = false;
 
     /* First, get the vaddr of the dynsym table from the `DT_SYMTAB` entry */
-    if (find_symtab(entries, clazz,
+    if (find_symtab(entries, data->clazz,
                     &symtab_vaddr, &symentsize, &dt_symtab_idx, &dt_syment_idx))
     {
         /* error already printed */
@@ -867,7 +805,7 @@ int parse_dynsym(
      * we must infer it from the DT_HASH and/or DT_GNU_HASH structure(s)
      * and even then, sometimes we just can't lmao.
      * What a great spec... */
-    if (parse_dynamic_hash_tables(data, clazz, encoding, phdrs, shdrs, entries,
+    if (parse_dynamic_hash_tables(data, phdrs, shdrs, entries,
                                   sht_dynsym_idx, out_hash, out_gnu_hash,
                                   &nsyms))
     {
@@ -909,7 +847,7 @@ int parse_dynsym(
     }
 
     /* Finally, read the actual table */
-    if (read_dynamic_symbol_table(data, clazz, encoding, symtab_off, nsyms,
+    if (read_dynamic_symbol_table(data, symtab_off, nsyms,
                                   strtab->size, shdrs->num,
                                   &sym_arr, &uses_symtab_shndx))
     {
@@ -919,7 +857,7 @@ int parse_dynsym(
 
     /* Validate the hash tables by looking up every symbol in the symtab */
     if (validate_dynamic_hash_tables(data, strtab, out_hash, out_gnu_hash,
-                                     sym_arr, nsyms, clazz))
+                                     sym_arr, nsyms))
     {
         pr_error("Failed to validate the DT(_GNU)_HASH table(s)\n");
         goto err;
@@ -936,7 +874,7 @@ int parse_dynsym(
 
     /* Also parse the SYMTAB_SHNDX section, if required and/or present */
     if (parse_dyn_symtab_shndx_if_exists(entries, phdrs, shdrs, sht_dynsym_idx,
-                                         data, clazz, encoding, sym_arr, nsyms,
+                                         data, sym_arr, nsyms,
                                          uses_symtab_shndx, out_symtab_shndx))
     {
         pr_error("Invalid DT/SHT_SYMTAB_SHNDX\n");
@@ -1024,9 +962,10 @@ static int find_symtab(const struct elf_dyn_entries *entries, int clazz,
 }
 
 static int parse_dynamic_hash_tables(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+
         struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
         Elf64_Xword *out_dynsym_count
 )
@@ -1036,11 +975,11 @@ static int parse_dynamic_hash_tables(
      * (line ~4315) */
 
     const int sysv_hash_ret =
-        parse_dt_hash(data, clazz, encoding, phdrs, shdrs,
-                          entries, sht_dynsym_idx, out_hash);
+        parse_dt_hash(data, phdrs, shdrs, entries, sht_dynsym_idx,
+                      out_hash);
     const int gnu_hash_ret =
-        parse_dt_gnu_hash(data, clazz, encoding, phdrs, shdrs,
-                          entries, sht_dynsym_idx, out_gnu_hash);
+        parse_dt_gnu_hash(data, phdrs, shdrs, entries, sht_dynsym_idx,
+                          out_gnu_hash);
 
     pr_debug("DT_HASH: %s, DT_GNU_HASH: %s\n",
             (sysv_hash_ret == 0 ? "OK" :
@@ -1105,7 +1044,7 @@ static int parse_dynamic_hash_tables(
 }
 
 static int parse_dt_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
         struct elf_dt_hash *out
@@ -1117,7 +1056,7 @@ static int parse_dt_hash(
 
     int ret = 0;
     uint64_t off = 0, end = 0;
-    ret = find_dt_hash(data, clazz, encoding, phdrs, entries, out);
+    ret = find_dt_hash(data, phdrs, entries, out);
     if (ret) /* ret < 0 means invalid, > 0 means absent */
         goto err; /* error already printed */
     off = out->off;
@@ -1129,14 +1068,14 @@ static int parse_dt_hash(
     /* `find_dt_hash` already checks that
      * `dt_hash.off + dt_hash.total_size` doesn't overflow */
     end = off + out->total_size;
-    if (read_dt_hash_contents(data, clazz, encoding, &off, &out->hdr, end,
+    if (read_dt_hash_contents(data, &off, &out->hdr, end,
                               &out->buckets, &out->chain))
     {
         pr_error("Failed to read the DT_HASH table contents\n");
         goto err;
     }
 
-    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, clazz,
+    if (validate_sht_hash_if_exists(shdrs, out, sht_dynsym_idx, data->clazz,
                                     &out->shdr))
     {
         pr_error("Invalid SHT_HASH section\n");
@@ -1161,9 +1100,8 @@ err:
 }
 
 static int find_dt_hash(
-        const struct blob *data, int clazz, int encoding,
-        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
-        struct elf_dt_hash *out
+        const ElfFileData *data, const struct elf_phdrs *phdrs,
+        const struct elf_dyn_entries *entries, struct elf_dt_hash *out
 )
 {
     *out = (struct elf_dt_hash) { 0 };
@@ -1198,8 +1136,8 @@ static int find_dt_hash(
     /* Read the header */
     struct elf_dt_hash_hdr hdr = { 0 }; /* same across both classes */
     uint64_t off = dt_hash_off;
-    if (read_Word(data, &off, clazz, encoding, &hdr.nbucket) ||
-        read_Word(data, &off, clazz, encoding, &hdr.nchain) ||
+    if (read_Word(data, &off, &hdr.nbucket) ||
+        read_Word(data, &off, &hdr.nchain) ||
         (off < dt_hash_off || off != dt_hash_off + DT_HASH_HDR_SIZE) ||
         (size_t)hdr.nbucket != hdr.nbucket || (size_t)hdr.nchain != hdr.nchain)
     {
@@ -1246,7 +1184,7 @@ static int find_dt_hash(
 }
 
 static int read_dt_hash_contents(
-        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
+        const ElfFileData *data, Elf64_Off *off_p,
         const struct elf_dt_hash_hdr *hdr, Elf64_Off end,
         Elf32_Word **out_buckets, Elf32_Word **out_chain
 )
@@ -1278,7 +1216,7 @@ static int read_dt_hash_contents(
     *off_p += DT_HASH_HDR_SIZE;
 
     for (Elf32_Word i = 0; i < hdr->nbucket; i++) {
-        if (read_Word(data, off_p, clazz, encoding, &buckets[i])) {
+        if (read_Word(data, off_p, &buckets[i])) {
             pr_error("Failed to read DT_HASH bucket no %" PRIu32 "\n", i);
             goto err;
         }
@@ -1289,7 +1227,7 @@ static int read_dt_hash_contents(
     }
 
     for (Elf32_Word i = 0; i < hdr->nchain; i++) {
-        if (read_Word(data, off_p, clazz, encoding, &chain[i])) {
+        if (read_Word(data, off_p, &chain[i])) {
             pr_error("Failed to read DT_HASH chain no %" PRIu32 "\n", i);
             goto err;
         }
@@ -1398,7 +1336,7 @@ static int validate_sht_hash_if_exists(const struct elf_shdrs *shdrs,
 }
 
 static int parse_dt_gnu_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
         struct elf_dt_gnu_hash *out
@@ -1410,8 +1348,7 @@ static int parse_dt_gnu_hash(
     Elf32_Word max_bucket = 0;
     Elf64_Off chain_off = 0;
 
-    int ret = find_dt_gnu_hash(data, clazz, encoding, phdrs, entries,
-                               out, &ptload);
+    int ret = find_dt_gnu_hash(data, phdrs, entries, out, &ptload);
     if (ret != 0) {
         /* error already printed */
         goto err;
@@ -1420,8 +1357,8 @@ static int parse_dt_gnu_hash(
     /* Any failure from this point means an >invalid< DT_GNU_HASH */
     ret = -1;
 
-    if (read_bloom_and_buckets(data, clazz, encoding, phdrs,
-                               out, ptload, &max_bucket, &chain_off))
+    if (read_bloom_and_buckets(data, phdrs, out, ptload,
+                               &max_bucket, &chain_off))
     {
         pr_error("Failed to read the DT_GNU_HASH bloom filter and buckets\n");
         goto err;
@@ -1442,18 +1379,15 @@ static int parse_dt_gnu_hash(
         }
     } else {
         out->is_canonically_empty = false;
-        if (find_gnu_hash_nchain(data, clazz, encoding, phdrs,
-                                 ptload, out, max_bucket, chain_off,
-                                 &out->nchain))
+        if (find_gnu_hash_nchain(data, phdrs, ptload, out,
+                                 max_bucket, chain_off, &out->nchain))
         {
             pr_error("Couldn't find the number of entries "
                      "in the GNU hash chain\n");
             goto err;
         }
 
-        if (read_gnu_hash_chain(data, clazz, encoding, chain_off, out->nchain,
-                                &out->chain))
-        {
+        if (read_gnu_hash_chain(data, chain_off, out->nchain, &out->chain)) {
             pr_error("Failed to read the GNU hash chain\n");
             goto err;
         }
@@ -1478,7 +1412,7 @@ static int parse_dt_gnu_hash(
         }
     }
 
-    if (validate_sht_gnu_hash_if_exists(out, shdrs, sht_dynsym_idx, clazz,
+    if (validate_sht_gnu_hash_if_exists(out, shdrs, sht_dynsym_idx, data->clazz,
                                         &out->shdr))
     {
         pr_error("GNU hash section data mismatch\n");
@@ -1507,10 +1441,8 @@ err:
     return ret;
 }
 
-static int read_dt_gnu_hash_hdr(
-        const struct blob *data, int clazz, int encoding, uint64_t *off_p,
-        struct elf_dt_gnu_hash_hdr *out
-)
+static int read_dt_gnu_hash_hdr(const ElfFileData *data, Elf64_Off *off_p,
+                                struct elf_dt_gnu_hash_hdr *out)
 {
     const uint64_t start_off = *off_p;
     if (start_off > UINT64_MAX - DT_GNU_HASH_HDR_SIZE)
@@ -1518,10 +1450,10 @@ static int read_dt_gnu_hash_hdr(
     const uint64_t end = start_off + DT_GNU_HASH_HDR_SIZE;
 
     /* same across both classes */
-    if (read_Word(data, off_p, clazz, encoding, &out->nbuckets) ||
-        read_Word(data, off_p, clazz, encoding, &out->symoffset) ||
-        read_Word(data, off_p, clazz, encoding, &out->bloom_size) ||
-        read_Word(data, off_p, clazz, encoding, &out->bloom_shift))
+    if (read_Word(data, off_p, &out->nbuckets) ||
+        read_Word(data, off_p, &out->symoffset) ||
+        read_Word(data, off_p, &out->bloom_size) ||
+        read_Word(data, off_p, &out->bloom_shift))
     {
         pr_error("Failed to read the DT_GNU_HASH header words\n");
         return 1;
@@ -1559,7 +1491,7 @@ static int read_dt_gnu_hash_hdr(
 }
 
 static int find_dt_gnu_hash(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
         struct elf_dt_gnu_hash *out, elf_idx_t *out_pt_load_idx
 )
@@ -1597,7 +1529,7 @@ static int find_dt_gnu_hash(
     /* Read the header */
     uint64_t off = dt_gnu_hash_off;
     struct elf_dt_gnu_hash_hdr hdr = { 0 };
-    if (read_dt_gnu_hash_hdr(data, clazz, encoding, &off, &hdr)) {
+    if (read_dt_gnu_hash_hdr(data, &off, &hdr)) {
         pr_error("Failed to read the DT_GNU_HASH header\n");
         return -1;
     }
@@ -1611,7 +1543,7 @@ static int find_dt_gnu_hash(
     out->off = dt_gnu_hash_off;
     out->vaddr = vaddr;
     out->dyn_entry = dt_gnu_hash_idx;
-    out->bloomentsize = clazz == ELFCLASS32 ?
+    out->bloomentsize = data->clazz == ELFCLASS32 ?
         sizeof(Elf32_Word) : sizeof(Elf64_Xword);
     *out_pt_load_idx = pt_load_idx;
 
@@ -1619,7 +1551,7 @@ static int find_dt_gnu_hash(
 }
 
 static int read_bloom_and_buckets(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, struct elf_dt_gnu_hash *ctx,
         elf_idx_t pt_load_idx, Elf32_Word *out_max_bucket,
         Elf64_Off *out_chain_off
@@ -1681,7 +1613,7 @@ static int read_bloom_and_buckets(
         uint64_t off = bloom_off;
         for (Elf32_Word i = 0; i < ctx->hdr.bloom_size; i++) {
             /* glibc uses `ElfXX_Addr` for this too, lol */
-            if (read_Addr(data, &off, clazz, encoding, &bloom[i])) {
+            if (read_Addr(data, &off, &bloom[i])) {
                 pr_error("Failed to read bloom filter entry no %" PRIu32 "\n",
                          i);
                 goto err;
@@ -1703,7 +1635,7 @@ static int read_bloom_and_buckets(
         }
         uint64_t off = buckets_off;
         for (Elf32_Word i = 0; i < ctx->hdr.nbuckets; i++) {
-            if (read_Word(data, &off, clazz, encoding, &buckets[i])) {
+            if (read_Word(data, &off, &buckets[i])) {
                 pr_error("Failed to read bucket no %" PRIu32 "\n", i);
                 goto err;
             }
@@ -1747,7 +1679,7 @@ err:
 }
 
 static int find_gnu_hash_nchain(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, elf_idx_t containing_phdr_idx,
         const struct elf_dt_gnu_hash *ctx, Elf32_Word max_bucket,
         Elf64_Off chain_off, Elf32_Word *out
@@ -1790,7 +1722,7 @@ static int find_gnu_hash_nchain(
         }
 
         Elf32_Word c = 0;
-        if (read_Word(data, &off, clazz, encoding, &c)) {
+        if (read_Word(data, &off, &c)) {
             pr_error("Failed to read chain entry no %" PRIu64 "\n", idx);
             return 1;
         }
@@ -1812,10 +1744,8 @@ static int find_gnu_hash_nchain(
     return 0;
 }
 
-static int read_gnu_hash_chain(
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Off chain_off, Elf32_Word nchain, Elf32_Word **out
-)
+static int read_gnu_hash_chain(const ElfFileData *data, Elf64_Off chain_off,
+                               Elf32_Word nchain, Elf32_Word **out)
 {
     Elf32_Word *chain = NULL;
 
@@ -1836,7 +1766,7 @@ static int read_gnu_hash_chain(
     {
         uint64_t off = chain_off;
         for (Elf32_Word i = 0; i < nchain; i++) {
-            if (read_Word(data, &off, clazz, encoding, &chain[i])) {
+            if (read_Word(data, &off, &chain[i])) {
                 pr_error("Failed to read hash chain entry no %" PRIu32 "\n", i);
                 goto err;
             }
@@ -1937,7 +1867,7 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
 }
 
 static int read_dynamic_symbol_table(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         Elf64_Off tbl_offset, Elf64_Xword nsyms,
         Elf64_Xword dynstr_size, Elf64_Xword n_shdrs,
         Elf64_Sym **out, bool *out_uses_symtab_shndx
@@ -1960,7 +1890,7 @@ static int read_dynamic_symbol_table(
     {
         Elf64_Sym tmp = { 0 };
         Elf64_Off tmp_off = tbl_offset;
-        if (read_sym(data, &tmp_off, clazz, encoding, &tmp)) {
+        if (read_sym(data, &tmp_off, &tmp)) {
             pr_error("Failed to read the first dynamic symbol\n");
             goto err;
         }
@@ -1980,7 +1910,7 @@ static int read_dynamic_symbol_table(
     }
 
     for (Elf64_Xword i = 0; i < nsyms; i++) {
-        if (read_sym(data, &off, clazz, encoding, &arr[i])) {
+        if (read_sym(data, &off, &arr[i])) {
             pr_error("Failed to read dynamic symbol no %" PRIu64 "\n", i);
             goto err;
         }
@@ -2082,9 +2012,9 @@ err:
 }
 
 static int validate_dynamic_hash_tables(
-        const struct blob *data, const struct elf_dyn_strtab *strtab,
+        const ElfFileData *data, const struct elf_dyn_strtab *strtab,
         const struct elf_dt_hash *hash, const struct elf_dt_gnu_hash *gnu_hash,
-        const Elf64_Sym *symtab, Elf64_Xword nsyms, int clazz
+        const Elf64_Sym *symtab, Elf64_Xword nsyms
 )
 {
     if (validate_sysv_hash(hash, symtab, nsyms, strtab, data)) {
@@ -2092,7 +2022,7 @@ static int validate_dynamic_hash_tables(
         return 1;
     }
 
-    if (validate_gnu_hash(gnu_hash, symtab, nsyms, strtab, data, clazz)) {
+    if (validate_gnu_hash(gnu_hash, symtab, nsyms, strtab, data)) {
         pr_error("Invalid GNU-style symbol name hash table (DT_GNU_HASH)\n");
         return 1;
     }
@@ -2104,7 +2034,7 @@ static int validate_dynamic_hash_tables(
 static int validate_sysv_hash(const struct elf_dt_hash *hash,
                               const Elf64_Sym *symtab, Elf64_Xword nsyms,
                               const struct elf_dyn_strtab *strtab,
-                              const struct blob *data)
+                              const ElfFileData *data)
 {
     if (!hash->present)
         return 0;
@@ -2180,7 +2110,7 @@ static int validate_sysv_hash(const struct elf_dt_hash *hash,
                 /* Check if the current symbol's name hashes to the correct
                  * starting index (bucket) */
                 const uint8_t *const name =
-                    &data->data[strtab->off + symtab[idx].st_name];
+                    &data->buf[strtab->off + symtab[idx].st_name];
                 const Elf32_Word h = sysv_hash(name);
 
                 if (h % hash->hdr.nbucket != b) {
@@ -2203,7 +2133,7 @@ err:
 static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
                              const Elf64_Sym *symtab, Elf64_Xword nsyms,
                              const struct elf_dyn_strtab *strtab,
-                             const struct blob *data, int clazz)
+                             const ElfFileData *data)
 {
     if (!hash->present)
         return 0;
@@ -2273,7 +2203,7 @@ static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
             const Elf64_Sym *const sym = &symtab[sym_idx];
 
             const Elf32_Word h =
-                gnu_hash(&data->data[strtab->off + sym->st_name]);
+                gnu_hash(&data->buf[strtab->off + sym->st_name]);
 
             const Elf32_Word curr_chain_entry = hash->chain[chain_idx];
 
@@ -2296,7 +2226,7 @@ static int validate_gnu_hash(const struct elf_dt_gnu_hash *hash,
             }
 
             /* 1) hash passes the bloom filter test */
-            const Elf32_Word class_bits = clazz == ELFCLASS32 ? 32u : 64u;
+            const Elf32_Word class_bits = data->clazz == ELFCLASS32 ? 32u : 64u;
             const Elf32_Word bloom_idx = (h / class_bits) % hash->hdr.bloom_size;
             const Elf64_Xword bloom_word = hash->bloom[bloom_idx];
 
@@ -2400,8 +2330,8 @@ static int validate_sht_dynsym_if_exists(
 static int parse_dyn_symtab_shndx_if_exists(
         const struct elf_dyn_entries *entries, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Sym *symtab, Elf64_Xword nsyms, bool must_exist,
+        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        bool must_exist,
 
         struct elf_dyn_symtab_shndx *out
 )
@@ -2451,8 +2381,8 @@ static int parse_dyn_symtab_shndx_if_exists(
 
     /* Read the SYMTAB_SHNDX contents */
     if (exists) {
-        if (read_symtab_shndx_contents(data, clazz, encoding,
-                                     symtab, nsyms, off, size, shdrs, &arr))
+        if (read_symtab_shndx_contents(data, symtab, nsyms, off, size, shdrs,
+                                       &arr))
         {
             pr_error("Failed to parse the DT_SYMTAB_SHNDX contents\n");
             goto err;
@@ -2488,9 +2418,8 @@ err:
 }
 
 static int read_symtab_shndx_contents(
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Sym *symtab, Elf64_Xword nsyms, Elf64_Off start, Elf64_Xword size,
-        const struct elf_shdrs *shdrs,
+        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        Elf64_Off start, Elf64_Xword size, const struct elf_shdrs *shdrs,
         Elf32_Word **out
 )
 {
@@ -2510,7 +2439,7 @@ static int read_symtab_shndx_contents(
     }
 
     for (Elf64_Xword i = 0; i < nsyms; i++) {
-        if (read_Word(data, &off, clazz, encoding, &arr[i])) {
+        if (read_Word(data, &off, &arr[i])) {
             pr_error("Failed to read SHT_SYMTAB_SHNDX entry "
                      "no %" PRIu64 "\n", i);
             goto err;

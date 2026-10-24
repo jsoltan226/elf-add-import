@@ -14,14 +14,17 @@
  * Part of `read_elf`; called before `read_validate_ehdr`
  * to determine the ELF's class and data encoding.
  *
- * @param[in] data The data to read from. Must not be NULL.
+ * @param[in] buf The data buffer to read from. Must not be NULL.
+ *
+ * @param[in] size Size of `buf`.
  *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 if the ELF ident bytes have sensible and supported values,
  *  non-zero on failure.
  */
-static int read_validate_ident(const struct blob *data, struct elf_ident *out);
+static int read_validate_ident(const uint8_t *buf, uint64_t size,
+                               struct elf_ident *out);
 
 /**
  * Parses the ELF header to obtain the number of entries and the size
@@ -45,7 +48,7 @@ static int read_validate_ident(const struct blob *data, struct elf_ident *out);
  */
 static int parse_phdr_tbl_data_from_ehdr(
         const Elf64_Ehdr *ehdr,
-        const Elf64_Shdr *first_shdr, const struct blob *data,
+        const Elf64_Shdr *first_shdr, const ElfFileData *data,
         Elf64_Xword *out_phnum, uint64_t *out_phsize
 );
 
@@ -66,7 +69,7 @@ static int parse_phdr_tbl_data_from_ehdr(
  * @return 0 on success, non-zero on failure.
  */
 static int validate_phdr_generic(
-        const Elf64_Ehdr *ehdr, const struct blob *data,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword i, uint64_t off,
         const Elf64_Phdr *phdr
 );
@@ -169,7 +172,7 @@ static int validate_pt_dynamic_phdr(const Elf64_Phdr *phdr,
  */
 static int validate_pt_interp_phdr(const Elf64_Phdr *phdr,
                                    bool *found_p, bool found_pt_load,
-                                   const struct blob *data, bool toplevel_ok,
+                                   const ElfFileData *data, bool toplevel_ok,
                                    Elf64_Xword i, uint64_t off);
 
 /**
@@ -221,11 +224,6 @@ static int validate_pt_phdr_phdr(
  *
  * @param[in] data The ELF file data. Must not be NULL.
  *
- * @param[in] clazz Class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding Data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out_shnum Output pointer for the real number of section headers.
  *  Must not be NULL.
  *
@@ -238,8 +236,7 @@ static int validate_pt_phdr_phdr(
  * @return 0 on success, non-zero on failure.
  */
 static int parse_shdr_tbl_data_from_ehdr(
-        const Elf64_Ehdr *ehdr,
-        const struct blob *data, int clazz, int encoding,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Word *out_shstrndx
 );
 
@@ -258,19 +255,13 @@ static int parse_shdr_tbl_data_from_ehdr(
  *
  * @param[in] data The ELF file data to read from. Must not be NULL.
  *
- * @param[in] clazz Class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding Data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero on failure.
  */
 static int read_validate_shstrtab_shdr(
         const Elf64_Ehdr *ehdr, Elf64_Xword shnum, Elf64_Word shstrndx,
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Shdr *out
+        const ElfFileData *data, Elf64_Shdr *out
 );
 
 /**
@@ -292,43 +283,43 @@ static int read_validate_shstrtab_shdr(
  * @return 0 on success, non-zero on failure.
  */
 static int validate_shdr(
-        const Elf64_Ehdr *ehdr, const struct blob *data,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword i, uint64_t off, const Elf64_Shdr *shstrtab,
         const Elf64_Shdr *shdr
 );
 
-int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
-                       Elf64_Ehdr *out)
+int read_validate_ehdr(const ElfFileData *data, Elf64_Ehdr *out)
 {
-    if ((clazz == ELFCLASS32 && data->size < sizeof(Elf32_Ehdr)) ||
-        (clazz == ELFCLASS64 && data->size < sizeof(Elf64_Ehdr)))
+    if ((data->clazz == ELFCLASS32 && data->size < sizeof(Elf32_Ehdr)) ||
+        (data->clazz == ELFCLASS64 && data->size < sizeof(Elf64_Ehdr)))
     {
-        pr_error("File too small to be an ELF file\n");
+        pr_error("File too small to be an ELF\n");
         return 1;
     }
 
     uint64_t off = UINT64_C(0);
-    memcpy(&out->e_ident, data->data, EI_NIDENT);
+    memcpy(&out->e_ident, data->buf, EI_NIDENT);
     off += EI_NIDENT;
 
-    if (read_Half(data, &off, clazz, encoding, &out->e_type) ||
-        read_Half(data, &off, clazz, encoding, &out->e_machine) ||
-        read_Word(data, &off, clazz, encoding, &out->e_version) ||
-        read_Addr(data, &off, clazz, encoding, &out->e_entry) ||
-        read_Off(data, &off, clazz, encoding, &out->e_phoff) ||
-        read_Off(data, &off, clazz, encoding, &out->e_shoff) ||
-        read_Word(data, &off, clazz, encoding, &out->e_flags) ||
-        read_Half(data, &off, clazz, encoding, &out->e_ehsize) ||
-        read_Half(data, &off, clazz, encoding, &out->e_phentsize) ||
-        read_Half(data, &off, clazz, encoding, &out->e_phnum) ||
-        read_Half(data, &off, clazz, encoding, &out->e_shentsize) ||
-        read_Half(data, &off, clazz, encoding, &out->e_shnum) ||
-        read_Half(data, &off, clazz, encoding, &out->e_shstrndx))
+    if (read_Half(data, &off, &out->e_type) ||
+        read_Half(data, &off, &out->e_machine) ||
+        read_Word(data, &off, &out->e_version) ||
+        read_Addr(data, &off, &out->e_entry) ||
+        read_Off(data, &off, &out->e_phoff) ||
+        read_Off(data, &off, &out->e_shoff) ||
+        read_Word(data, &off, &out->e_flags) ||
+        read_Half(data, &off, &out->e_ehsize) ||
+        read_Half(data, &off, &out->e_phentsize) ||
+        read_Half(data, &off, &out->e_phnum) ||
+        read_Half(data, &off, &out->e_shentsize) ||
+        read_Half(data, &off, &out->e_shnum) ||
+        read_Half(data, &off, &out->e_shstrndx))
     {
         return 1;
     }
 
     int ret = 0;
+    const int c = data->clazz;
 
     pr_debug("ELF type: 0x%" PRIx16 " (%s)\n",
             out->e_type, elf_type_toString(out->e_type));
@@ -355,16 +346,16 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
     pr_debug("Flags: 0x%" PRIx32 "\n", out->e_flags);
 
     pr_debug("ELF header size: 0x%" PRIx16 "\n", out->e_ehsize);
-    if ((clazz == ELFCLASS32 && out->e_ehsize != sizeof(Elf32_Ehdr)) ||
-        (clazz == ELFCLASS64 && out->e_ehsize != sizeof(Elf64_Ehdr)))
+    if ((c == ELFCLASS32 && out->e_ehsize != sizeof(Elf32_Ehdr)) ||
+        (c == ELFCLASS64 && out->e_ehsize != sizeof(Elf64_Ehdr)))
     {
         pr_error("Invalid ELF header size\n");
         ret = 1;
     }
 
     pr_debug("Program header size: 0x%" PRIx16 "\n", out->e_phentsize);
-    if ((clazz == ELFCLASS32 && out->e_phentsize != sizeof(Elf32_Phdr)) ||
-        (clazz == ELFCLASS64 && out->e_phentsize != sizeof(Elf64_Phdr)))
+    if ((c == ELFCLASS32 && out->e_phentsize != sizeof(Elf32_Phdr)) ||
+        (c == ELFCLASS64 && out->e_phentsize != sizeof(Elf64_Phdr)))
     {
         pr_error("Invalid program header size\n");
         ret = 1;
@@ -386,8 +377,8 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
             ret = 1;
         }
     } else {
-        if ((clazz == ELFCLASS32 && out->e_shentsize != sizeof(Elf32_Shdr)) ||
-            (clazz == ELFCLASS64 && out->e_shentsize != sizeof(Elf64_Shdr)))
+        if ((c == ELFCLASS32 && out->e_shentsize != sizeof(Elf32_Shdr)) ||
+            (c == ELFCLASS64 && out->e_shentsize != sizeof(Elf64_Shdr)))
         {
             pr_error("Invalid section header size\n");
             ret = 1;
@@ -429,9 +420,8 @@ int read_validate_ehdr(const struct blob *data, int clazz, int encoding,
     return ret;
 }
 
-int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
-                        const Elf64_Ehdr *ehdr, const struct elf_shdrs *shdrs,
-                        int clazz, int encoding)
+int read_validate_phdrs(const ElfFileData *data, struct elf_phdrs *out,
+                        const Elf64_Ehdr *ehdr, const struct elf_shdrs *shdrs)
 {
     out->arr = NULL;
     out->num = 0;
@@ -464,7 +454,7 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
     Elf64_Phdr pt_phdr = { 0 }, pt_dynamic = { 0 };
 
     for (Elf64_Xword i = 0; i < phnum; i++) {
-        if (read_phdr(data, &off, clazz, encoding, &phdr)) {
+        if (read_phdr(data, &off, &phdr)) {
             pr_error("Couldn't read program header no %" PRIu64
                      " (offset 0x%" PRIx64 ")\n", i, off);
             ret = 1;
@@ -578,9 +568,8 @@ int read_validate_phdrs(const struct blob *data, struct elf_phdrs *out,
     return ret;
 }
 
-int read_validate_shdrs(const struct blob *data,
-                        struct elf_shdrs *out, Elf64_Word *out_shstrndx,
-                        const Elf64_Ehdr *ehdr, int clazz, int encoding)
+int read_validate_shdrs(const ElfFileData *data, struct elf_shdrs *out,
+                        const Elf64_Ehdr *ehdr, Elf64_Word *out_shstrndx)
 {
     out->arr = NULL;
     out->num = 0;
@@ -592,9 +581,7 @@ int read_validate_shdrs(const struct blob *data,
     uint64_t shsize = 0; /**< Total size of section headers
                               (ehdr->e_shentsize * shnum) */
     Elf64_Word shstrndx = 0; /**< Real index of the shstrtab section */
-    if (parse_shdr_tbl_data_from_ehdr(ehdr, data, clazz, encoding,
-                                      &shnum, &shsize, &shstrndx))
-    {
+    if (parse_shdr_tbl_data_from_ehdr(ehdr, data, &shnum, &shsize, &shstrndx)) {
         pr_error("Invalid section header table information in ELF header\n");
         return 1;
     } else if (shnum == 0 || shsize == 0) {
@@ -605,8 +592,7 @@ int read_validate_shdrs(const struct blob *data,
     Elf64_Shdr shstrtab = { 0 }; /**< Section header of the shstrtab section,
                                   * which contains all sections' name strings */
     if (shstrndx != 0) {
-        if (read_validate_shstrtab_shdr(ehdr, shnum, shstrndx,
-                                        data, clazz, encoding, &shstrtab))
+        if (read_validate_shstrtab_shdr(ehdr, shnum, shstrndx, data, &shstrtab))
         {
             pr_error("Invalid shstrtab section header\n");
             return 1;
@@ -630,7 +616,7 @@ int read_validate_shdrs(const struct blob *data,
     uint8_t duplicates_bitfield = 0x00;
 
     for (Elf64_Xword i = 0; i < shnum; i++) {
-        if (read_shdr(data, &off, clazz, encoding, &shdr)) {
+        if (read_shdr(data, &off, &shdr)) {
             pr_error("Couldn't read section header no %" PRIu64
                      " (offset 0x%" PRIx64 ")\n", i, off);
             ret = 1;
@@ -690,40 +676,43 @@ int read_validate_shdrs(const struct blob *data,
     return ret;
 }
 
-int parse_elf(struct blob *data, struct elf *out, bool move)
+int parse_elf(uint8_t *buf, uint64_t size, struct elf *out, bool move)
 {
-    if (data == NULL || data->data == NULL) {
-        pr_error("`data` is NULL\n");
+    if (buf == NULL) {
+        pr_error("Data buffer is NULL\n");
         return -1;
     }
 
     struct elf e = { 0 };
-    int c = ELFCLASSNONE, d = ELFDATANONE;
-    memset(&e, 0, sizeof(struct elf));
+    ElfFileData d = { 0 };
 
-    if (read_validate_ident(data, &e.ident)) {
+    if (read_validate_ident(buf, size, &e.ident)) {
         pr_error("Not an ELF file (invalid magic)\n");
         goto err;
     }
-    c = e.ident.clazz;
-    d = e.ident.data;
+    d = (ElfFileData) {
+        .buf = buf,
+        .size = size,
+        .clazz = e.ident.clazz,
+        .encoding = e.ident.data
+    };
 
-    if (read_validate_ehdr(data, c, d, &e.ehdr)) {
+    if (read_validate_ehdr(&d, &e.ehdr)) {
         pr_error("Invalid ELF header\n");
         goto err;
     }
 
-    if (read_validate_shdrs(data, &e.shdrs, &e.shstrndx, &e.ehdr, c, d)) {
+    if (read_validate_shdrs(&d, &e.shdrs, &e.ehdr, &e.shstrndx)) {
         pr_error("Invalid section headers\n");
         goto err;
     }
 
-    if (read_validate_phdrs(data, &e.phdrs, &e.ehdr, &e.shdrs, c, d)) {
+    if (read_validate_phdrs(&d, &e.phdrs, &e.ehdr, &e.shdrs)) {
         pr_error("Invalid program headers\n");
         goto err;
     }
 
-    if (parse_dyn(data, c, d, &e.phdrs, &e.shdrs,
+    if (parse_dyn(&d, &e.phdrs, &e.shdrs,
                   &e.dyn, &e.dynentsize, &e.dynsymentsize))
     {
         pr_error("Invalid or missing dynamic linking information\n");
@@ -731,16 +720,23 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
     }
 
     if (move) {
-        e.data = *data;
-        *data = (struct blob) { .data = NULL, .size = 0 };
+        e.data = d;
+        d = (ElfFileData) { 0 };
     } else {
-        e.data.size = data->size;
-        e.data.data = malloc(data->size);
-        if (e.data.data == NULL) {
+        if (d.size > SIZE_MAX) {
+            pr_error("Buffer size too large (integer overflow)\n");
+            goto err;
+        }
+        e.data.size = d.size;
+
+        e.data.buf = malloc((size_t)d.size);
+        if (e.data.buf == NULL) {
             pr_error("Failed to allocate a copy of the data\n");
             goto err;
         }
-        memcpy(e.data.data, data->data, data->size);
+        memcpy(e.data.buf, d.buf, (size_t)d.size);
+
+        d = (ElfFileData) { 0 };
     }
 
     e.orig.ehdr = e.ehdr;
@@ -761,8 +757,8 @@ int parse_elf(struct blob *data, struct elf *out, bool move)
         destroy_elf(&e);
 
     printf("Successfully parsed ELF%s-%s data\n",
-           (c == ELFCLASS32 ? "32" : "64"),
-           (d == ELFDATA2MSB ? "BE" : "LE")
+           (e.ident.clazz == ELFCLASS32 ? "32" : "64"),
+           (e.ident.data == ELFDATA2MSB ? "BE" : "LE")
     );
     return 0;
 
@@ -773,30 +769,31 @@ err:
 
 int read_elf(const char *path, struct elf *out)
 {
-    struct blob data = { 0 };
-    if (read_file(path, &data)) {
+    uint8_t *buf = NULL;
+    uint64_t size = 0;
+    if (read_file(path, &buf, &size)) {
         pr_error("Couldn't read input file \"%s\"\n", path);
         return 1;
     }
 
-    if (parse_elf(&data, out, true)) {
+    if (parse_elf(buf, size, out, true)) {
         pr_error("Couldn't parse ELF file \"%s\"\n", path);
-        free(data.data);
-        data = (struct blob) { 0 };
+        free(buf); buf = NULL;
         return 1;
     }
+    buf = NULL;
 
-    data = (struct blob) { 0 };
     return 0;
 }
 
-static int read_validate_ident(const struct blob *data, struct elf_ident *out)
+static int read_validate_ident(const uint8_t *buf, uint64_t size,
+                               struct elf_ident *out)
 {
-    if (data->size < EI_NIDENT) {
+    if (size < EI_NIDENT) {
         pr_error("File too small to be an ELF file\n");
         return -1;
     }
-    memcpy(out, data->data, EI_NIDENT);
+    memcpy(out, buf, EI_NIDENT);
 
     int ret = 0;
 
@@ -842,7 +839,7 @@ static int read_validate_ident(const struct blob *data, struct elf_ident *out)
 
 static int parse_phdr_tbl_data_from_ehdr(
         const Elf64_Ehdr *ehdr,
-        const Elf64_Shdr *first_shdr, const struct blob *data,
+        const Elf64_Shdr *first_shdr, const ElfFileData *data,
         Elf64_Xword *out_phnum, uint64_t *out_phsize
 )
 {
@@ -897,7 +894,7 @@ static int parse_phdr_tbl_data_from_ehdr(
 }
 
 static int validate_phdr_generic(
-        const Elf64_Ehdr *ehdr, const struct blob *data,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword i, uint64_t off,
         const Elf64_Phdr *phdr
 )
@@ -1012,7 +1009,7 @@ static int validate_pt_dynamic_phdr(const Elf64_Phdr *phdr,
 
 static int validate_pt_interp_phdr(const Elf64_Phdr *phdr,
                                    bool *found_p, bool found_pt_load,
-                                   const struct blob *data, bool toplevel_ok,
+                                   const ElfFileData *data, bool toplevel_ok,
                                    Elf64_Xword i, uint64_t off)
 {
     int ret = 0;
@@ -1040,7 +1037,7 @@ static int validate_pt_interp_phdr(const Elf64_Phdr *phdr,
     }
 
     if (toplevel_ok && !ret) {
-        if (data->data[phdr->p_offset + phdr->p_filesz - 1] != '\0') {
+        if (data->buf[phdr->p_offset + phdr->p_filesz - 1] != '\0') {
             pr_error(
                 "[Program header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
                 "PT_INTERP string is not NULL-terminated\n", i, off
@@ -1048,7 +1045,7 @@ static int validate_pt_interp_phdr(const Elf64_Phdr *phdr,
             ret = 1;
         } else {
             printf("Program interpreter: %s\n",
-                   (const char *)&data->data[phdr->p_offset]);
+                   (const char *)&data->buf[phdr->p_offset]);
         }
     } else {
         ret = 1;
@@ -1098,8 +1095,7 @@ static int validate_pt_phdr_phdr(
 }
 
 static int parse_shdr_tbl_data_from_ehdr(
-        const Elf64_Ehdr *ehdr,
-        const struct blob *data, int clazz, int encoding,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Word *out_shstrndx
 )
 {
@@ -1110,9 +1106,7 @@ static int parse_shdr_tbl_data_from_ehdr(
     }
 
     Elf64_Shdr first_shdr = { 0 };
-    if (read_shdr(data, &(uint64_t) { ehdr->e_shoff },
-                  clazz, encoding, &first_shdr))
-    {
+    if (read_shdr(data, &(Elf64_Off) { ehdr->e_shoff }, &first_shdr)) {
         pr_error("Couldn't read the first section header\n");
         return 1;
     }
@@ -1176,8 +1170,7 @@ static int parse_shdr_tbl_data_from_ehdr(
 
 static int read_validate_shstrtab_shdr(
         const Elf64_Ehdr *ehdr, Elf64_Xword shnum, Elf64_Word shstrndx,
-        const struct blob *data, int clazz, int encoding,
-        Elf64_Shdr *out
+        const ElfFileData *data, Elf64_Shdr *out
 )
 {
     if (shstrndx == SHN_UNDEF) {
@@ -1192,10 +1185,12 @@ static int read_validate_shstrtab_shdr(
      * `ehdr->e_shoff + (shnum * ehdr->e_shentsize)`
      * has been validated in the above `parse_shdr_tbl_data_from_ehdr`
      * to not overflow `data->size` as well as `UINT64_MAX` and `SIZE_MAX`. */
-    uint64_t shstrtaboff = ehdr->e_shoff + (shstrndx * ehdr->e_shentsize);
-    if (read_shdr(data, &shstrtaboff, clazz, encoding, out)) {
-        pr_error("Couldn't read the shstrtab section header\n");
-        return 1;
+    {
+        Elf64_Off shstrtaboff = ehdr->e_shoff + (shstrndx * ehdr->e_shentsize);
+        if (read_shdr(data, &shstrtaboff, out)) {
+            pr_error("Couldn't read the shstrtab section header\n");
+            return 1;
+        }
     }
 
     if (out->sh_type != SHT_STRTAB) {
@@ -1214,12 +1209,12 @@ static int read_validate_shstrtab_shdr(
         return 1;
     }
 
-    if (data->data[out->sh_offset] != '\0') {
+    if (data->buf[out->sh_offset] != '\0') {
         pr_error("Section .shstrtab doesn't start with a NULL character\n");
         return 1;
     }
 
-    if (data->data[out->sh_offset + out->sh_size - 1] != '\0') {
+    if (data->buf[out->sh_offset + out->sh_size - 1] != '\0') {
         pr_error("Section .shstrtab is not NULL-terminated\n");
         return 1;
     }
@@ -1228,7 +1223,7 @@ static int read_validate_shstrtab_shdr(
 }
 
 static int validate_shdr(
-        const Elf64_Ehdr *ehdr, const struct blob *data,
+        const Elf64_Ehdr *ehdr, const ElfFileData *data,
         Elf64_Xword i, uint64_t off, const Elf64_Shdr *shstrtab,
         const Elf64_Shdr *shdr
 )

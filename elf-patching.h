@@ -204,18 +204,13 @@ int update_dyn_symtab_off(struct elf *elf, Elf64_Off new_off);
  *  On success, the function should increment this offset
  *  to point past the written bytes.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[in] data A pointer to an instance of the in-memory representation
  *  of the data type to serialize (e.g. `Elf64_Shdr`).
  *
  * @return 0 on success, non-zero on failure.
  */
-typedef int (*serializer_proc_t)(struct blob *out, uint64_t *off_p,
-                                 int clazz, int encoding, const void *data);
+typedef int (*serializer_proc_t)(ElfFileData *out, uint64_t *off_p,
+                                 const void *data);
 
 /**
  * @brief Serializes an array of entries (e.g. program headers, dynamic entries, etc)
@@ -242,16 +237,11 @@ typedef int (*serializer_proc_t)(struct blob *out, uint64_t *off_p,
  *
  * @param[in] cnt The number of entries in `arr` (the array size).
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @return 0 on success, non-zero on failure.
  */
-int serialize_arr(struct blob *data, serializer_proc_t serializer,
+int serialize_arr(ElfFileData *data, serializer_proc_t serializer,
                   const void *arr, size_t mementsize, Elf64_Half fileentsize,
-                  uint64_t off, Elf64_Xword cnt, int clazz, int encoding);
+                  uint64_t off, Elf64_Xword cnt);
 
 /**
  * @brief Re-serializes all relevant potentially modified ELF structures.

@@ -31,14 +31,23 @@ dummy_pr_debug__(const char *fmt, ...) { (void) fmt; }
 #define u_min(a, b) ((a) < (b) ? (a) : (b))
 #define u_max(a, b) ((a) > (b) ? (a) : (b))
 
-/** @struct Generic container for an array of bytes */
-struct blob {
-    /** The size of `data` */
+/** @struct ELF file data buffer along with metadata needed to parse it */
+typedef struct elf_file_data {
+    /** The size of `buf` */
     uint64_t size;
 
     /** The (usually malloc'd) buffer containing the bytes */
-    uint8_t *data;
-};
+    uint8_t *buf;
+
+    /** Class of the ELF file (`ELFCLASS32` or `ELFCLASS64`) */
+    int clazz;
+
+    /**
+     * Data encoding (endianness) of the ELF file
+     * (`ELFDATA2MSB` or `ELFDATA2LSB`)
+     */
+    int encoding;
+} ElfFileData;
 
 /**
  * Reads a file into a newly allocated buffer.
@@ -46,13 +55,16 @@ struct blob {
  * @param[in] path The path of the file to read.
  *  Must not be NULL.
  *
- * @param[out] out An empty blob structure
- *  to which the file contents will be copied.
+ * @param[out] out_buf Output pointer for the new array
+ *  to which the file contents will be read.
+ *  Must not be NULL.
+ *
+ * @param[out] out_size Output pointer for the size of the new `out_buf`.
  *  Must not be NULL.
  *
  * @return 0 on success, non-zero on failure.
  */
-int read_file(const char *path, struct blob *out);
+int read_file(const char *path, uint8_t **out_buf, uint64_t *out_size);
 
 /**
  * Writes a data buffer into a file.
@@ -61,12 +73,13 @@ int read_file(const char *path, struct blob *out);
  *  The file is created if it doesn't exist and truncated otherwise.
  *  Must not be NULL.
  *
- * @param[in] data A blob structure containing the data to write.
- *  Must not be NULL.
+ * @param[in] buf The data to write. Must not be NULL.
+ *
+ * @param[in] size Size of `buf`. Must be in the range (0, SIZE_MAX].
  *
  * @return 0 on success, non-zero on failure.
  */
-int write_file(const char *path, const struct blob *data);
+int write_file(const char *path, const uint8_t *buf, uint64_t size);
 
 /**
  * Increments `*off_p` by `size`, storing the previous value in `out`.
@@ -217,7 +230,7 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  */
 int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
                  Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
-                 const struct elf_phdrs *phdrs, const struct blob *data,
+                 const struct elf_phdrs *phdrs, const ElfFileData *data,
                  void **ptr_p, Elf64_Xword *out_new_file_size);
 
 /**

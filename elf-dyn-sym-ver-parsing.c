@@ -60,10 +60,10 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
                         const struct elf_dyn_entries *entries,
                         elf_idx_t dt_verdef_idx, elf_idx_t dt_verdefnum_idx,
                         verndx_bitmap_t seen_vndx_bitmap,
-                        const struct blob *data, int clazz, int encoding);
+                        const ElfFileData *data);
 
 static int read_verdef_entries(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
         const struct elf_dyn_strtab *strtab, Elf64_Off start_off, size_t num,
         Elf64_Verdef **out, Elf64_Verdaux ***out_aux_lists,
@@ -72,7 +72,7 @@ static int read_verdef_entries(
 );
 
 static int read_verdaux_list(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_dyn_strtab *strtab, Elf64_Word vd_hash,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
         Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
@@ -90,14 +90,14 @@ static int parse_verneed(const struct elf_phdrs *phdrs,
                          const struct elf_dyn_entries *entries,
                          elf_idx_t dt_verneed_idx, elf_idx_t dt_verneednum_idx,
                          verndx_bitmap_t seen_vndx_bitmap,
-                         const struct blob *data, int clazz, int encoding);
+                         const ElfFileData *data);
 
 
 int parse_ver(const struct elf_phdrs *phdrs,
               const struct elf_shdrs *shdrs,
               const struct elf_dyn_strtab *strtab,
               const struct elf_dyn_entries *entries,
-              const struct blob *data, int clazz, int encoding)
+              const ElfFileData *data)
 {
     int r = 0;
     elf_idx_t dt_versym_idx = ELF_IDX_NULL;
@@ -145,7 +145,7 @@ int parse_ver(const struct elf_phdrs *phdrs,
     if (verdef_present) {
         if (parse_verdef(phdrs, shdrs, strtab, entries,
                 verdef_idxs[DT_VERDEF_IDX], verdef_idxs[DT_VERDEFNUM_IDX],
-                seen_vndx_bitmap, data, clazz, encoding))
+                seen_vndx_bitmap, data))
         {
             pr_error("Failed to parse symbol version definition information\n");
             goto err;
@@ -155,7 +155,7 @@ int parse_ver(const struct elf_phdrs *phdrs,
     if (verneed_present) {
         if (parse_verneed(phdrs, shdrs, strtab, entries,
                 verneed_idxs[DT_VERNEED_IDX], verneed_idxs[DT_VERNEEDNUM_IDX],
-                seen_vndx_bitmap, data, clazz, encoding))
+                seen_vndx_bitmap, data))
         {
             pr_error("Failed to parse symbol version dependency information\n");
             goto err;
@@ -192,12 +192,12 @@ static int verdef_name_ref_cmp(const void *a_, const void *b_)
 
 static int validate_verdef_names(
         const Elf64_Verdef *arr, const Elf64_Verdaux *const *aux_lists,
-        size_t num, const struct elf_dyn_strtab *strtab, const struct blob *data
+        size_t num, const struct elf_dyn_strtab *strtab, const ElfFileData *data
 )
 {
     int ret = 0;
     struct verdef_name_ref *refs = NULL;
-    const uint8_t *const strtab_bytes = data->data + strtab->off;
+    const uint8_t *const strtab_bytes = data->buf + strtab->off;
 
     refs = calloc(num, sizeof(*refs));
     if (refs == NULL) {
@@ -279,7 +279,7 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
                         const struct elf_dyn_entries *entries,
                         elf_idx_t dt_verdef_idx, elf_idx_t dt_verdefnum_idx,
                         verndx_bitmap_t seen_vndx_bitmap,
-                        const struct blob *data, int clazz, int encoding)
+                        const ElfFileData *data)
 {
     const Elf64_Addr vaddr = entries->arr[dt_verdef_idx].d_un.d_ptr;
     const Elf64_Xword num = entries->arr[dt_verdefnum_idx].d_un.d_val;
@@ -318,7 +318,7 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
         goto err;
     }
 
-    if (read_verdef_entries(data, clazz, encoding, phdrs, ptload_idx, strtab,
+    if (read_verdef_entries(data, phdrs, ptload_idx, strtab,
                             tbl_off, (size_t)num, &arr, &aux_arrs,
                             &vd_base_idx, &max_end, seen_vndx_bitmap))
     {
@@ -378,7 +378,7 @@ err:
 }
 
 static int read_validate_verdef_entry(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         Elf64_Off seg_end, const struct elf_dyn_strtab *strtab,
         bool is_last_entry, Elf64_Off *max_end_p,
         verndx_bitmap_t seen_vndx_bitmap, Elf64_Off *off_p,
@@ -393,7 +393,7 @@ static int read_validate_verdef_entry(
     }
     {
         Elf64_Off tmp = *off_p;
-        if (read_verdef(data, &tmp, clazz, encoding, out)) {
+        if (read_verdef(data, &tmp, out)) {
             pr_error("Failed to read verdef entry from file data\n");
             return 1;
         }
@@ -451,7 +451,7 @@ static int read_validate_verdef_entry(
 
     Elf64_Off aux_end = 0;
     /* also validates `vd_hash` */
-    if (read_verdaux_list(data, clazz, encoding, strtab, out->vd_hash,
+    if (read_verdaux_list(data, strtab, out->vd_hash,
                           seg_end, aux_off, out->vd_cnt, max_end_p,
                           out_aux_list, &aux_end))
     {
@@ -491,7 +491,7 @@ static int read_validate_verdef_entry(
 }
 
 static int read_verdef_entries(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
         const struct elf_dyn_strtab *strtab, Elf64_Off start_off, size_t num,
         Elf64_Verdef **out, Elf64_Verdaux ***out_aux_lists,
@@ -532,7 +532,7 @@ static int read_verdef_entries(
     for (size_t i = 0; i < num; i++) {
         const bool is_last = (i == num - 1);
         bool is_base = false;
-        if (read_validate_verdef_entry(data, clazz, encoding, ptload_end,
+        if (read_validate_verdef_entry(data, ptload_end,
                                        strtab, is_last, &max_end, seen_vndx_bitmap,
                                        &off, &arr[i], &aux_lists[i], &is_base))
         {
@@ -554,7 +554,7 @@ static int read_verdef_entries(
         goto err;
     } else {
         pr_debug("BASE Verdef entry: \"%s\"\n",
-                 (const char *)data->data + strtab->off +
+                 (const char *)data->buf + strtab->off +
                                 aux_lists[vd_base_idx][0].vda_name);
     }
 
@@ -584,7 +584,7 @@ err:
 }
 
 static int read_validate_verdaux_entry(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_dyn_strtab *strtab, Elf64_Word vd_hash,
         Elf64_Off seg_end, bool is_first_entry, bool is_last_entry,
         Elf64_Off *max_end_p, Elf64_Off *off_p, Elf64_Verdaux *out
@@ -597,7 +597,7 @@ static int read_validate_verdaux_entry(
     }
     {
         Elf64_Off tmp = *off_p;
-        if (read_verdaux(data, &tmp, clazz, encoding, out)) {
+        if (read_verdaux(data, &tmp, out)) {
             pr_error("Failed to read verdaux entry from file data\n");
             return 1;
         }
@@ -617,7 +617,7 @@ static int read_validate_verdaux_entry(
     /* Parent verdef's `vd_hash` should match
      * `sysv_hash(first_aux->vda_name)` */
     if (is_first_entry) {
-        const uint8_t *str_ptr = data->data + strtab->off + out->vda_name;
+        const uint8_t *str_ptr = data->buf + strtab->off + out->vda_name;
         if (sysv_hash(str_ptr) != vd_hash) {
             pr_error("Hash of vda_name doesn't match parent verdef vd_hash\n");
             return 1;
@@ -650,7 +650,7 @@ static int read_validate_verdaux_entry(
 }
 
 static int read_verdaux_list(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_dyn_strtab *strtab, Elf64_Word vd_hash,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
         Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
@@ -676,7 +676,7 @@ static int read_verdaux_list(
     for (Elf64_Half i = 0; i < cnt; i++) {
         const bool is_first = (i == 0);
         const bool is_last = (i == cnt - 1);
-        if (read_validate_verdaux_entry(data, clazz, encoding, strtab,
+        if (read_validate_verdaux_entry(data, strtab,
                                         vd_hash, seg_end, is_first, is_last,
                                         max_end_p, &off, &arr[i]))
         {
@@ -686,10 +686,10 @@ static int read_verdaux_list(
         }
         if (is_first) {
             pr_debug("Verdef entry aux[0]: \"%s\"\n",
-                 (const char *)data->data + strtab->off + arr[i].vda_name);
+                 (const char *)data->buf + strtab->off + arr[i].vda_name);
         } else {
             pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
-                     (const char *)data->data + strtab->off + arr[i].vda_name);
+                     (const char *)data->buf + strtab->off + arr[i].vda_name);
         }
 
         if (is_last)
@@ -788,7 +788,7 @@ static int dt_needed_name_cmp(const void *a_, const void *b_)
 
 static int init_dt_needed_name_table(
         const struct elf_dyn_entries *entries,
-        const struct elf_dyn_strtab *strtab, const struct blob *data,
+        const struct elf_dyn_strtab *strtab, const ElfFileData *data,
         struct dt_needed_name **out, size_t *out_num
 )
 {
@@ -834,7 +834,7 @@ static int init_dt_needed_name_table(
                 pr_error("DT_NEEDED entry value overflows string table\n");
                 goto err;
             }
-            const uint8_t *str_ptr = data->data +
+            const uint8_t *str_ptr = data->buf +
                                      strtab->off + curr_entry->d_un.d_val;
             new_tbl[dt_needed_idx].hash = gnu_hash(str_ptr);
 
@@ -857,7 +857,7 @@ err:
 
 static bool name_is_dt_needed(
         const struct dt_needed_name *dt_needed_tbl, size_t n_dt_needed,
-        const struct blob *data, const struct elf_dyn_strtab *strtab,
+        const ElfFileData *data, const struct elf_dyn_strtab *strtab,
         Elf64_Word vn_file
 )
 {
@@ -880,18 +880,18 @@ static bool name_is_dt_needed(
     if (res != NULL) {
         pr_debug("Verneed \"%s\": matching DT_NEEDED found "
                  "using pointer equality\n",
-                 (const char *)(data->data + strtab->off + vn_file));
+                 (const char *)(data->buf + strtab->off + vn_file));
         found = true;
     } else {
         /* If we don't find a matching name by exact "pointer equality",
          * just loop through the table and compare hashes. */
-        const uint8_t *str_ptr = data->data + strtab->off + vn_file;
+        const uint8_t *str_ptr = data->buf + strtab->off + vn_file;
         const Elf32_Word hash = gnu_hash(str_ptr);
         for (size_t j = 0; j < n_dt_needed; j++) {
             if (dt_needed_tbl[j].hash == hash) {
                 /* Do a strcmp in case of a hash collision */
                 const char *dt_needed_strptr = (const char *)
-                    (data->data + strtab->off + dt_needed_tbl[j].entry_val);
+                    (data->buf + strtab->off + dt_needed_tbl[j].entry_val);
                 if (!strcmp((const char *)str_ptr, dt_needed_strptr)) {
                     found = true;
                     pr_debug("Verneed \"%s\": matching DT_NEEDED found "
@@ -905,7 +905,7 @@ static bool name_is_dt_needed(
 }
 
 static int read_validate_vernaux_entry(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_dyn_strtab *strtab, Elf64_Off seg_end,
         bool is_last_entry, Elf64_Off *max_end_p,
         verndx_bitmap_t seen_vndx_bitmap, Elf64_Off *off_p,
@@ -919,7 +919,7 @@ static int read_validate_vernaux_entry(
     }
     {
         Elf64_Off tmp = *off_p;
-        if (read_vernaux(data, &tmp, clazz, encoding, out)) {
+        if (read_vernaux(data, &tmp, out)) {
             pr_error("Failed to read vernaux entry from file data\n");
             return 1;
         }
@@ -936,7 +936,7 @@ static int read_validate_vernaux_entry(
         return 1;
     }
 
-    const uint8_t *str_ptr = data->data + strtab->off + out->vna_name;
+    const uint8_t *str_ptr = data->buf + strtab->off + out->vna_name;
     if (sysv_hash(str_ptr) != out->vna_hash) {
         pr_error("vna_hash doesn't match the hash of the string "
                  "referenced by vna_name\n");
@@ -996,7 +996,7 @@ static int read_validate_vernaux_entry(
 }
 
 static int read_vernaux_list(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_dyn_strtab *strtab,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
         Elf64_Off *max_end_p, verndx_bitmap_t seen_vndx_bitmap,
@@ -1022,7 +1022,7 @@ static int read_vernaux_list(
     off = start_off;
     for (Elf64_Half i = 0; i < cnt; i++) {
         const bool is_last = (i == cnt - 1);
-        if (read_validate_vernaux_entry(data, clazz, encoding, strtab, seg_end,
+        if (read_validate_vernaux_entry(data, strtab, seg_end,
                                         is_last, max_end_p, seen_vndx_bitmap,
                                         &off, &arr[i]))
         {
@@ -1032,7 +1032,7 @@ static int read_vernaux_list(
         }
 
         pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
-                 (const char *)data->data + strtab->off + arr[i].vna_name);
+                 (const char *)data->buf + strtab->off + arr[i].vna_name);
         if (is_last)
             /* `read_validate_vernaux_entry` safely computes this value */
             list_end = off + VERNAUX_ENTSIZE;
@@ -1051,7 +1051,7 @@ err:
 }
 
 static int read_validate_verneed_entry(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct dt_needed_name *dt_needed_tbl, size_t n_dt_needed,
         Elf64_Off seg_end, const struct elf_dyn_strtab *strtab,
         bool is_last_entry,  Elf64_Off *max_end_p,
@@ -1066,7 +1066,7 @@ static int read_validate_verneed_entry(
     }
     {
         Elf64_Off tmp = *off_p;
-        if (read_verneed(data, &tmp, clazz, encoding, out)) {
+        if (read_verneed(data, &tmp, out)) {
             pr_error("Failed to read version dependency entry "
                      "from file data\n");
             return 1;
@@ -1106,7 +1106,7 @@ static int read_validate_verneed_entry(
     }
 
     Elf64_Off aux_end = 0;
-    if (read_vernaux_list(data, clazz, encoding, strtab, seg_end,
+    if (read_vernaux_list(data, strtab, seg_end,
                           aux_off, out->vn_cnt, max_end_p, seen_vndx_bitmap,
                           out_aux_list, &aux_end))
     {
@@ -1145,7 +1145,7 @@ static int read_validate_verneed_entry(
 }
 
 static int read_verneed_entries(
-        const struct blob *data, int clazz, int encoding,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
         const struct elf_dyn_entries *entries,
         const struct elf_dyn_strtab *strtab,
@@ -1193,7 +1193,7 @@ static int read_verneed_entries(
     off = tbl_off;
     for (size_t i = 0; i < num; i++) {
         const bool is_last = (i == num - 1);
-        if (read_validate_verneed_entry(data, clazz, encoding,
+        if (read_validate_verneed_entry(data,
                     dt_needed_tbl, n_dt_needed, ptload_end, strtab,
                     is_last, &max_end, seen_vndx_bitmap,
                     &off, &arr[i], &aux_lists[i]))
@@ -1261,7 +1261,7 @@ static int verneed_name_ref_cmp(const void *a_, const void *b_)
 
 static int validate_verneed_names_uniqueness(
         const Elf64_Verneed *arr, const Elf64_Vernaux *const *aux_lists,
-        size_t num, const struct elf_dyn_strtab *strtab, const struct blob *data
+        size_t num, const struct elf_dyn_strtab *strtab, const ElfFileData *data
 )
 {
     struct verneed_name_ref *refs = NULL;
@@ -1289,13 +1289,13 @@ static int validate_verneed_names_uniqueness(
         size_t refs_idx = 0;
         for (size_t i = 0; i < num; i++) {
             const uint8_t *const vn_file_strptr =
-                data->data + strtab->off + arr[i].vn_file;
+                data->buf + strtab->off + arr[i].vn_file;
 
             for (Elf64_Half j = 0; j < arr[i].vn_cnt; j++) {
                 const Elf64_Vernaux *const curr_aux = &aux_lists[i][j];
 
                 const uint8_t *const vna_name_strptr =
-                    data->data + strtab->off + curr_aux->vna_name;
+                    data->buf + strtab->off + curr_aux->vna_name;
 
                 assert(refs_idx < total_aux);
                 refs[refs_idx] = (struct verneed_name_ref) {
@@ -1339,7 +1339,7 @@ static int parse_verneed(const struct elf_phdrs *phdrs,
                          const struct elf_dyn_entries *entries,
                          elf_idx_t dt_verneed_idx, elf_idx_t dt_verneednum_idx,
                          verndx_bitmap_t seen_vndx_bitmap,
-                         const struct blob *data, int clazz, int encoding)
+                         const ElfFileData *data)
 {
     const Elf64_Addr vaddr = entries->arr[dt_verneed_idx].d_un.d_ptr;
     const Elf64_Xword num = entries->arr[dt_verneednum_idx].d_un.d_val;
@@ -1377,7 +1377,7 @@ static int parse_verneed(const struct elf_phdrs *phdrs,
         goto err;
     }
 
-    if (read_verneed_entries(data, clazz, encoding, phdrs, ptload_idx,
+    if (read_verneed_entries(data, phdrs, ptload_idx,
                              entries, strtab, tbl_off, (size_t)num,
                              &arr, &aux_arrs, &max_end, seen_vndx_bitmap))
     {

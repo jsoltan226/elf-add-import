@@ -73,9 +73,7 @@
  *                                                                             \
  * @return 0 on success, non-zero if the data is outside of buffer bounds.     \
  */                                                                            \
-int read_##name(const struct blob *data, uint64_t *off_p,                      \
-                int clazz, int encoding,                                       \
-                Elf64_##name *out);                                            \
+int read_##name(const ElfFileData *data, Elf64_Off *off_p, Elf64_##name *out); \
                                                                                \
 /**                                                                            \
  * Serializes an ELF primitive type to the given class and data encoding.      \
@@ -96,9 +94,7 @@ int read_##name(const struct blob *data, uint64_t *off_p,                      \
  * @return 0 on success, non-zero if the serialized `val` can't fit in `data`  \
  *  or `clazz` is `ELFCLASS32` and `val` overflows the Elf32 equivalent type.  \
  */                                                                            \
-int write_##name(struct blob *data, uint64_t *off_p,                           \
-                 int clazz, int encoding,                                      \
-                 Elf64_##name val);                                            \
+int write_##name(ElfFileData *data, Elf64_Off *off_p, Elf64_##name val);       \
 
 ELF_PRIMITIVE_LIST
 
@@ -118,18 +114,12 @@ ELF_PRIMITIVE_LIST
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[in] ehdr The in-memory ELF header to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `ehdr` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_ehdr(struct blob *data, uint64_t *off_p,
-               int clazz, int encoding, const Elf64_Ehdr *ehdr);
+int write_ehdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Ehdr *ehdr);
 
 /**
  * Parses a program header structure to the generic in-memory representation.
@@ -141,17 +131,11 @@ int write_ehdr(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_phdr(const struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, Elf64_Phdr *out);
+int read_phdr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Phdr *out);
 
 /**
  * Serializes a program header structure to the given class and data encoding.
@@ -162,18 +146,12 @@ int read_phdr(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[in] phdr The in-memory program header to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `phdr` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_phdr(struct blob *data, uint64_t *off_p,
-               int clazz, int encoding, const Elf64_Phdr *phdr);
+int write_phdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Phdr *phdr);
 
 /**
  * Parses a section header structure to the generic in-memory representation.
@@ -185,17 +163,11 @@ int write_phdr(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_shdr(const struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, Elf64_Shdr *out);
+int read_shdr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Shdr *out);
 
 /**
  * Serializes a section header structure to the given class and data encoding.
@@ -206,18 +178,12 @@ int read_shdr(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[in] shdr The in-memory section header to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `shdr` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_shdr(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Shdr *shdr);
+int write_shdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Shdr *shdr);
 
 /**
  * Parses a dynamic entry structure to the generic in-memory representation.
@@ -229,17 +195,11 @@ int write_shdr(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_dyn(const struct blob *data, uint64_t *off_p,
-             int clazz, int encoding, Elf64_Dyn *out);
+int read_dyn(const ElfFileData *data, Elf64_Off *off_p, Elf64_Dyn *out);
 
 /**
  * Serializes a dynamic entry structure to the given class and data encoding.
@@ -250,18 +210,12 @@ int read_dyn(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] dyn The in-memory dynamic entry to serialize. Must not be NULL.
+ * @param[in] d The in-memory dynamic entry to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `dyn` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_dyn(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Dyn *dyn);
+int write_dyn(ElfFileData *data, Elf64_Off *off_p, const Elf64_Dyn *d);
 
 /**
  * Parses a symbol table entry to the generic in-memory representation.
@@ -273,17 +227,11 @@ int write_dyn(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_sym(const struct blob *data, uint64_t *off_p,
-             int clazz, int encoding, Elf64_Sym *out);
+int read_sym(const ElfFileData *data, Elf64_Off *off_p, Elf64_Sym *out);
 
 /**
  * Serializes a symbol table entry to the given class and data encoding.
@@ -294,42 +242,12 @@ int read_sym(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] sym The in-memory symbol struct to serialize. Must not be NULL.
+ * @param[in] s The in-memory symbol struct to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_sym(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Sym *sym);
-
-/**
- * Serializes a symbol version definition struct
- * to the given class and data encoding.
- *
- * @param[out] data The data to write into. Must not be NULL.
- *
- * @param[in,out] off_p A pointer to the offset at which to write.
- *  This value will be incremented to point past the newly written data.
- *  Must not be NULL.
- *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] vd The in-memory symbol version definition struct to serialize.
- *  Must not be NULL.
- *
- * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
- *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
- */
-int write_verdef(struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, const Elf64_Verdef *vd);
+int write_sym(ElfFileData *data, Elf64_Off *off_p, const Elf64_Sym *s);
 
 /**
  * Parses a symbol version definition struct to the generic
@@ -342,20 +260,14 @@ int write_verdef(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_verdef(const struct blob *data, uint64_t *off_p,
-                int clazz, int encoding, Elf64_Verdef *out);
+int read_verdef(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdef *out);
 
 /**
- * Serializes a symbol version definition auxiliary information struct
+ * Serializes a symbol version definition struct
  * to the given class and data encoding.
  *
  * @param[out] data The data to write into. Must not be NULL.
@@ -364,19 +276,13 @@ int read_verdef(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] vda The in-memory symbol version definition auxiliary information
- *  struct to serialize. Must not be NULL.
+ * @param[in] vd The in-memory symbol version definition struct to serialize.
+ *  Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_verdaux(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Verdaux *vda);
+int write_verdef(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdef *vd);
 
 /**
  * Parses a symbol version definition auxiliary information struct
@@ -389,20 +295,14 @@ int write_verdaux(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_verdaux(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Verdaux *out);
+int read_verdaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdaux *out);
 
 /**
- * Serializes a symbol version dependency struct
+ * Serializes a symbol version definition auxiliary information struct
  * to the given class and data encoding.
  *
  * @param[out] data The data to write into. Must not be NULL.
@@ -411,19 +311,14 @@ int read_verdaux(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] vn The in-memory symbol version dependency struct to serialize.
- *  Must not be NULL.
+ * @param[in] vda The in-memory symbol version definition auxiliary information
+ *  struct to serialize. Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_verneed(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Verneed *vn);
+int write_verdaux(ElfFileData *data, Elf64_Off *off_p,
+                  const Elf64_Verdaux *vda);
 
 /**
  * Parses a symbol version dependency struct to the generic
@@ -436,20 +331,14 @@ int write_verneed(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_verneed(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Verneed *out);
+int read_verneed(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verneed *out);
 
 /**
- * Serializes a symbol version dependency auxiliary information struct
+ * Serializes a symbol version dependency struct
  * to the given class and data encoding.
  *
  * @param[out] data The data to write into. Must not be NULL.
@@ -458,19 +347,13 @@ int read_verneed(const struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the newly written data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
- * @param[in] vna The in-memory symbol version dependency auxiliary information
- *  struct to serialize. Must not be NULL.
+ * @param[in] vn The in-memory symbol version dependency struct to serialize.
+ *  Must not be NULL.
  *
  * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
-int write_vernaux(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Vernaux *vna);
+int write_verneed(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verneed *vn);
 
 /**
  * Parses a symbol version dependency auxiliary information struct
@@ -483,17 +366,30 @@ int write_vernaux(struct blob *data, uint64_t *off_p,
  *  This value will be incremented to point past the read data.
  *  Must not be NULL.
  *
- * @param[in] clazz The class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
- *
- * @param[in] encoding The data encoding (endianness) of the ELF file
- *  (`ELFDATA2MSB` or `ELFDATA2LSB`).
- *
  * @param[out] out Output pointer. Must not be NULL.
  *
  * @return 0 on success, non-zero if the data is outside of buffer bounds.
  */
-int read_vernaux(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Vernaux *out);
+int read_vernaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Vernaux *out);
+
+/**
+ * Serializes a symbol version dependency auxiliary information struct
+ * to the given class and data encoding.
+ *
+ * @param[out] data The data to write into. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to write.
+ *  This value will be incremented to point past the newly written data.
+ *  Must not be NULL.
+ *
+ * @param[in] vna The in-memory symbol version dependency auxiliary information
+ *  struct to serialize. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
+ */
+int write_vernaux(ElfFileData *data, Elf64_Off *off_p,
+                  const Elf64_Vernaux *vna);
 
 /**
  * Returns a string with the name of the ET_* ELF type

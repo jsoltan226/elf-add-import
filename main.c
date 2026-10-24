@@ -469,7 +469,7 @@ static int construct_appended_ptload_phdr(const struct elf *elf,
  *
  * @return 0 on success, non-zero on failure.
  */
-static int prepare_move_data(bool wipe, struct blob *data,
+static int prepare_move_data(bool wipe, ElfFileData *data,
                              Elf64_Off src_off, Elf64_Xword src_size,
                              Elf64_Off dst_off, Elf64_Xword dst_size);
 
@@ -494,7 +494,7 @@ int main(int argc, char **argv)
         list_sections(&elf);
 
         if (parse_ver(&elf.phdrs, &elf.shdrs, &elf.dyn.strtab,
-                      &elf.dyn.entries, &elf.data, elf.ident.clazz, elf.ident.data))
+                      &elf.dyn.entries, &elf.data))
         {
             pr_error("parse_ver has failed\n");
             /* goto err; */
@@ -552,16 +552,16 @@ int main(int argc, char **argv)
     /** Validate the newly serialized ELF **/
     {
         printf("Validating patched data... ");
-        if (parse_elf(&elf.data, NULL, false)) {
+        if (parse_elf(elf.data.buf, elf.data.size, NULL, false)) {
             printf("Sanity check failed\n");
             /* write the corrupted file anyway for inspection */
-            (void) write_file(argv[2], &elf.data);
+            (void) write_file(argv[2], elf.data.buf, elf.data.size);
             goto err;
         }
     }
 
     /** Write the result and clean up **/
-    if (write_file(argv[2], &elf.data))
+    if (write_file(argv[2], elf.data.buf, elf.data.size))
         goto err;
 
     destroy_elf(&elf);
@@ -656,7 +656,7 @@ static int validate_mod_cfg(const struct mod_cfg *cfg)
 static int prepare_modifications(const struct mod_cfg *cfg,
                                  struct elf *elf, struct mod_ctx *out)
 {
-    memset(out, 0, sizeof(struct mod_ctx));
+    *out = (struct mod_ctx) { 0 };
 
     if (validate_mod_cfg(cfg)) {
         pr_error("Invalid modifications configuration data\n");
@@ -1054,7 +1054,7 @@ static int grow_move_modify_dynstr(
     }
 
     for (Elf64_Xword i = 0; i < state->n_str_offsets; i++) {
-        memcpy(&elf->data.data[new_off + state->str_offsets[i]],
+        memcpy(&elf->data.buf[new_off + state->str_offsets[i]],
                cfg->strings[i], strlen(cfg->strings[i]));
     }
 
@@ -1143,9 +1143,9 @@ static void destroy_modifications(struct mod_ctx *ctx)
     if (ctx->state.dyn.dynstr.str_offsets != NULL)
         free(ctx->state.dyn.dynstr.str_offsets);
 
-    /* right now `ctx` contains only references to `elf`,
+    /* for now, `ctx` contains only references to `elf`,
      * it doesn't actually own any resources */
-    memset(ctx, 0, sizeof(struct mod_ctx));
+    *ctx = (struct mod_ctx) { 0 };
 }
 
 static int construct_appended_ptload_phdr(const struct elf *elf,
@@ -1216,7 +1216,7 @@ static int construct_appended_ptload_phdr(const struct elf *elf,
     return 0;
 }
 
-static int prepare_move_data(bool wipe, struct blob *data,
+static int prepare_move_data(bool wipe, ElfFileData *data,
                              Elf64_Off src_off, Elf64_Xword src_size,
                              Elf64_Off dst_off, Elf64_Xword dst_size)
 {
@@ -1236,7 +1236,7 @@ static int prepare_move_data(bool wipe, struct blob *data,
     const Elf64_Off dst_end = dst_off + dst_size;
 
     if (dst_end > data->size) {
-        if ((data->data = safe_realloc((void **)&data->data, dst_end, 1))
+        if ((data->buf = safe_realloc((void **)&data->buf, dst_end, 1))
                 == NULL)
         {
             pr_error("Failed to grow (realloc) the ELF file data\n");
@@ -1245,14 +1245,14 @@ static int prepare_move_data(bool wipe, struct blob *data,
         pr_debug("[%s] Grew data from 0x%" PRIx64 " to 0x%" PRIx64 "\n",
                  __func__, data->size, dst_end);
         /* zero out the newly allocated block */
-        memset(data->data + data->size, 0, dst_end - data->size);
+        memset(data->buf + data->size, 0, dst_end - data->size);
         data->size = dst_end;
     }
 
     if (wipe) {
-        memset(data->data + dst_off, 0, dst_size);
+        memset(data->buf + dst_off, 0, dst_size);
     } else {
-        memmove(data->data + dst_off, data->data + src_off,
+        memmove(data->buf + dst_off, data->buf + src_off,
                 u_min(src_size, dst_size));
     }
 
@@ -1273,7 +1273,7 @@ static int prepare_move_data(bool wipe, struct blob *data,
         while (off < clean_end) {
             const size_t n = u_min(clean_end - off,
                                     sizeof(SUS_REPLACEMENT_STRING) - 1);
-            memcpy(data->data + off, SUS_REPLACEMENT_STRING, n);
+            memcpy(data->buf + off, SUS_REPLACEMENT_STRING, n);
             off += n;
         }
 

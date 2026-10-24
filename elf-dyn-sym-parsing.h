@@ -30,10 +30,6 @@
  *
  * @param[in] data The ELF file's data. Must not be NULL.
  *
- * @param[in] clazz Class of the ELF file.
- *
- * @param[in] encoding Data (byte) order of the ELF file.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
@@ -62,7 +58,7 @@
  * @return 0 on success, non-zero on failure.
  */
 int parse_dynsym(
-    const struct blob *data, int clazz, int encoding,
+    const ElfFileData *data,
     const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
     const struct elf_dyn_entries *entries, const struct elf_dyn_strtab *strtab,
 

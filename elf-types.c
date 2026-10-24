@@ -21,7 +21,7 @@
  *
  * @return 0 on success, non-zero on failure (out of bounds).
  */
-static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out);
+static int read_byte(const ElfFileData *data, Elf64_Off *off_p, uint8_t *out);
 
 /**
  * Writes a byte to a blob while ensuring that the offset is within bounds.
@@ -35,7 +35,7 @@ static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out);
  *
  * @return 0 on success, non-zero on failure (out of bounds).
  */
-static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val);
+static int write_byte(ElfFileData *data, Elf64_Off *off_p, uint8_t val);
 
 static inline bool host_is_little_endian(void)
 {
@@ -43,9 +43,8 @@ static inline bool host_is_little_endian(void)
     return *(const uint8_t *)&x == UINT8_C(1);
 }
 
-static int read_generic(const struct blob *data, uint64_t *off_p,
-                        uint64_t n, uint8_t *out /* [n] */,
-                        int encoding, const char *fnname)
+static int read_generic(const ElfFileData *data, Elf64_Off *off_p,
+                        Elf64_Off n, uint8_t *out /* [n] */, const char *fnname)
 {
 #ifndef pr_error
     (void) fnname;
@@ -64,21 +63,21 @@ static int read_generic(const struct blob *data, uint64_t *off_p,
     }
 
     const bool swap_needed =
-        host_is_little_endian() != (encoding == ELFDATA2LSB);
+        host_is_little_endian() != (data->encoding == ELFDATA2LSB);
     if (swap_needed) {
-        for (uint64_t i = 0; i < n; i++)
-            out[i] = data->data[*off_p + n - i - 1];
+        for (Elf64_Off i = 0; i < n; i++)
+            out[i] = data->buf[*off_p + n - i - 1];
     } else {
-        memcpy(out, data->data + *off_p, n);
+        memcpy(out, data->buf + *off_p, n);
     }
 
     *off_p += n;
     return 0;
 }
 
-static int write_generic(struct blob *data, uint64_t *off_p,
-                         uint64_t n, const uint8_t *val /* [n] */,
-                         int encoding, const char *fnname)
+static int write_generic(ElfFileData *data, Elf64_Off *off_p,
+                         Elf64_Off n, const uint8_t *val /* [n] */,
+                         const char *fnname)
 {
 #ifndef pr_error
     (void) fnname;
@@ -97,24 +96,24 @@ static int write_generic(struct blob *data, uint64_t *off_p,
     }
 
     const bool swap_needed =
-        host_is_little_endian() != (encoding == ELFDATA2LSB);
+        host_is_little_endian() != (data->encoding == ELFDATA2LSB);
     if (swap_needed) {
-        for (uint64_t i = 0; i < n; i++)
-            data->data[*off_p + n - i - 1] = val[i];
+        for (Elf64_Off i = 0; i < n; i++)
+            data->buf[*off_p + n - i - 1] = val[i];
     } else {
-        memcpy(data->data + *off_p, val, n);
+        memcpy(data->buf + *off_p, val, n);
     }
 
     *off_p += n;
     return 0;
 }
 
-static inline int64_t decode_s64(uint64_t u)
+static inline int64_t decode_s64(Elf64_Off u)
 {
     if (u <= INT64_MAX)
         return (int64_t)u;
 
-    uint64_t magnitude = UINT64_MAX - u + UINT64_C(1);
+    Elf64_Off magnitude = UINT64_MAX - u + UINT64_C(1);
 
     if (magnitude == UINT64_C(1) << 63)
         return INT64_MIN;
@@ -148,24 +147,20 @@ static inline int32_t decode_s32(uint32_t u)
 #define DECL_ELF_PRIMITIVE(name, bits32, bits64,                               \
                            exclusive64, signedness, same_size)                 \
                                                                                \
-int read_##name(const struct blob *data, uint64_t *off_p,                      \
-                int clazz, int encoding,                                       \
-                Elf64_##name *out)                                             \
+int read_##name(const ElfFileData *data, Elf64_Off *off_p, Elf64_##name *out)  \
 {                                                                              \
-    if (clazz == ELFCLASS32) {                                                 \
+    if (data->clazz == ELFCLASS32) {                                           \
         { exclusive64##_32bit_check; }                                         \
                                                                                \
         uint##bits32##_t tmp;                                                  \
-        if (read_generic(data, off_p, bits32 / 8, (uint8_t *)&tmp, encoding,   \
-                         __func__))                                            \
+        if (read_generic(data, off_p, bits32 / 8, (uint8_t *)&tmp, __func__))  \
             return 1;                                                          \
                                                                                \
         *out = (Elf64_##name) signedness##_read_conv(bits32);                  \
         return 0;                                                              \
-    } else /* if (clazz == ELFCLASS64) */ {                                    \
+    } else /* if (data->clazz == ELFCLASS64) */ {                              \
         uint##bits64##_t tmp;                                                  \
-        if (read_generic(data, off_p, bits64 / 8, (uint8_t *)&tmp, encoding,   \
-                         __func__))                                            \
+        if (read_generic(data, off_p, bits64 / 8, (uint8_t *)&tmp, __func__))  \
             return 1;                                                          \
                                                                                \
         *out = signedness##_read_conv(bits64);                                 \
@@ -210,22 +205,20 @@ ELF_PRIMITIVE_LIST
 #define DECL_ELF_PRIMITIVE(name, bits32, bits64,                               \
                            exclusive64, signedness, same_size)                 \
                                                                                \
-int write_##name(struct blob *data, uint64_t *off_p,                           \
-                 int clazz, int encoding,                                      \
-                 Elf64_##name val)                                             \
+int write_##name(ElfFileData *data, Elf64_Off *off_p, Elf64_##name val)        \
 {                                                                              \
-    if (clazz == ELFCLASS32) {                                                 \
+    if (data->clazz == ELFCLASS32) {                                           \
         { exclusive64##_32bit_check; }                                         \
                                                                                \
         { signedness##_32bit_write_limit_check(bits32, bits64, same_size); }   \
                                                                                \
         const uint##bits32##_t tmp = (uint##bits32##_t)val;                    \
         return write_generic(data, off_p, bits32 / 8, (const uint8_t *)&tmp,   \
-                             encoding, __func__);                              \
+                             __func__);                                        \
     } else /* if (clazz == ELFCLASS64) */ {                                    \
         const uint##bits64##_t tmp = (uint##bits64##_t)val;                    \
         return write_generic(data, off_p, bits64 / 8, (const uint8_t *)&tmp,   \
-                             encoding, __func__);                              \
+                             __func__);                                        \
     }                                                                          \
 }                                                                              \
 
@@ -239,10 +232,9 @@ ELF_PRIMITIVE_LIST
 #undef elf_64BIT_EXCLUSIVE_32bit_check
 #undef elf_BOTH_CLASSES_32bit_check
 
-int write_ehdr(struct blob *data, uint64_t *off_p,
-               int clazz, int encoding, const Elf64_Ehdr *ehdr)
+int write_ehdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Ehdr *ehdr)
 {
-    const size_t size = clazz == ELFCLASS32 ?
+    const size_t size = data->clazz == ELFCLASS32 ?
         sizeof(Elf32_Ehdr) : sizeof(Elf64_Ehdr);
 
     if (data->size < size) {
@@ -251,22 +243,22 @@ int write_ehdr(struct blob *data, uint64_t *off_p,
         return 1;
     }
 
-    memcpy(data->data + *off_p, &ehdr->e_ident, EI_NIDENT);
+    memcpy(data->buf + *off_p, &ehdr->e_ident, EI_NIDENT);
     *off_p += EI_NIDENT;
 
-    if (write_Half(data, off_p, clazz, encoding, ehdr->e_type) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_machine) ||
-        write_Word(data, off_p, clazz, encoding, ehdr->e_version) ||
-        write_Addr(data, off_p, clazz, encoding, ehdr->e_entry) ||
-        write_Off(data, off_p, clazz, encoding, ehdr->e_phoff) ||
-        write_Off(data, off_p, clazz, encoding, ehdr->e_shoff) ||
-        write_Word(data, off_p, clazz, encoding, ehdr->e_flags) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_ehsize) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_phentsize) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_phnum) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_shentsize) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_shnum) ||
-        write_Half(data, off_p, clazz, encoding, ehdr->e_shstrndx))
+    if (write_Half(data, off_p, ehdr->e_type) ||
+        write_Half(data, off_p, ehdr->e_machine) ||
+        write_Word(data, off_p, ehdr->e_version) ||
+        write_Addr(data, off_p, ehdr->e_entry) ||
+        write_Off(data, off_p, ehdr->e_phoff) ||
+        write_Off(data, off_p, ehdr->e_shoff) ||
+        write_Word(data, off_p, ehdr->e_flags) ||
+        write_Half(data, off_p, ehdr->e_ehsize) ||
+        write_Half(data, off_p, ehdr->e_phentsize) ||
+        write_Half(data, off_p, ehdr->e_phnum) ||
+        write_Half(data, off_p, ehdr->e_shentsize) ||
+        write_Half(data, off_p, ehdr->e_shnum) ||
+        write_Half(data, off_p, ehdr->e_shstrndx))
     {
         return 1;
     }
@@ -274,39 +266,37 @@ int write_ehdr(struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int read_phdr(const struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, Elf64_Phdr *out)
+int read_phdr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Phdr *out)
 {
-    if (read_Word(data, off_p, clazz, encoding, &out->p_type))
+    if (read_Word(data, off_p, &out->p_type))
         return 1;
 
     /* In ELF32 `p_flags` is in a different place than in ELF64 */
-    if (clazz == ELFCLASS64)
-        if (read_Word(data, off_p, clazz, encoding, &out->p_flags))
+    if (data->clazz == ELFCLASS64)
+        if (read_Word(data, off_p, &out->p_flags))
             return 1;
 
-    if (read_Off(data, off_p, clazz, encoding, &out->p_offset) ||
-        read_Addr(data, off_p, clazz, encoding, &out->p_vaddr) ||
-        read_Addr(data, off_p, clazz, encoding, &out->p_paddr))
+    if (read_Off(data, off_p, &out->p_offset) ||
+        read_Addr(data, off_p, &out->p_vaddr) ||
+        read_Addr(data, off_p, &out->p_paddr))
     {
         return 1;
     }
 
-    /* they really messed up the program header spec, didn't they? */
-    if (clazz == ELFCLASS64) {
-        if (read_Xword(data, off_p, clazz, encoding, &out->p_filesz) ||
-            read_Xword(data, off_p, clazz, encoding, &out->p_memsz) ||
-            read_Xword(data, off_p, clazz, encoding, &out->p_align))
+    if (data->clazz == ELFCLASS64) {
+        if (read_Xword(data, off_p, &out->p_filesz) ||
+            read_Xword(data, off_p, &out->p_memsz) ||
+            read_Xword(data, off_p, &out->p_align))
         {
             return 1;
         }
 
-    } else /* if (clazz == ELFCLASS32) */ {
+    } else /* if (data->clazz == ELFCLASS32) */ {
         Elf64_Word tmp_filesz = 0, tmp_memsz = 0, tmp_align = 0;
-        if (read_Word(data, off_p, clazz, encoding, &tmp_filesz) ||
-            read_Word(data, off_p, clazz, encoding, &tmp_memsz) ||
-            read_Word(data, off_p, clazz, encoding, &out->p_flags) ||
-            read_Word(data, off_p, clazz, encoding, &tmp_align))
+        if (read_Word(data, off_p, &tmp_filesz) ||
+            read_Word(data, off_p, &tmp_memsz) ||
+            read_Word(data, off_p, &out->p_flags) ||
+            read_Word(data, off_p, &tmp_align))
         {
                 return 1;
         }
@@ -338,8 +328,7 @@ int read_phdr(const struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int write_phdr(struct blob *data, uint64_t *off_p,
-               int clazz, int encoding, const Elf64_Phdr *phdr)
+int write_phdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Phdr *phdr)
 {
 #if 0
     pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
@@ -361,29 +350,29 @@ int write_phdr(struct blob *data, uint64_t *off_p,
              phdr->p_align, phdr->p_align);
 #endif /* 0 */
 
-    if (write_Word(data, off_p, clazz, encoding, phdr->p_type))
+    if (write_Word(data, off_p, phdr->p_type))
         return 1;
 
     /* In ELF32 `p_flags` is in a different place than in ELF64 */
-    if (clazz == ELFCLASS64)
-        if (write_Word(data, off_p, clazz, encoding, phdr->p_flags))
+    if (data->clazz == ELFCLASS64)
+        if (write_Word(data, off_p, phdr->p_flags))
             return 1;
 
-    if (write_Off(data, off_p, clazz, encoding, phdr->p_offset) ||
-        write_Addr(data, off_p, clazz, encoding, phdr->p_vaddr) ||
-        write_Addr(data, off_p, clazz, encoding, phdr->p_paddr))
+    if (write_Off(data, off_p, phdr->p_offset) ||
+        write_Addr(data, off_p, phdr->p_vaddr) ||
+        write_Addr(data, off_p, phdr->p_paddr))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (write_Xword(data, off_p, clazz, encoding, phdr->p_filesz) ||
-            write_Xword(data, off_p, clazz, encoding, phdr->p_memsz) ||
-            write_Xword(data, off_p, clazz, encoding, phdr->p_align))
+    if (data->clazz == ELFCLASS64) {
+        if (write_Xword(data, off_p, phdr->p_filesz) ||
+            write_Xword(data, off_p, phdr->p_memsz) ||
+            write_Xword(data, off_p, phdr->p_align))
         {
             return 1;
         }
-    } else /* if (clazz == ELFCLASS32) */ {
+    } else /* if (data->clazz == ELFCLASS32) */ {
         if (phdr->p_filesz > UINT32_MAX) {
             pr_error("p_filesz too large for Elf32_Word\n");
             return 1;
@@ -399,10 +388,10 @@ int write_phdr(struct blob *data, uint64_t *off_p,
             return 1;
         }
         const Elf32_Word align = (Elf32_Word)phdr->p_align;
-        if (write_Word(data, off_p, clazz, encoding, filesz) ||
-            write_Word(data, off_p, clazz, encoding, memsz) ||
-            write_Word(data, off_p, clazz, encoding, phdr->p_flags) ||
-            write_Word(data, off_p, clazz, encoding, align))
+        if (write_Word(data, off_p, filesz) ||
+            write_Word(data, off_p, memsz) ||
+            write_Word(data, off_p, phdr->p_flags) ||
+            write_Word(data, off_p, align))
         {
                 return 1;
         }
@@ -411,59 +400,58 @@ int write_phdr(struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int read_shdr(const struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, Elf64_Shdr *out)
+int read_shdr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Shdr *out)
 {
-    if (read_Word(data, off_p, clazz, encoding, &out->sh_name) ||
-        read_Word(data, off_p, clazz, encoding, &out->sh_type))
+    if (read_Word(data, off_p, &out->sh_name) ||
+        read_Word(data, off_p, &out->sh_type))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (read_Xword(data, off_p, clazz, encoding, &out->sh_flags))
+    if (data->clazz == ELFCLASS64) {
+        if (read_Xword(data, off_p, &out->sh_flags))
             return 1;
-    } else /* if (clazz == ELFCLASS32) */ {
+    } else /* if (data->clazz == ELFCLASS32) */ {
         Elf64_Word tmp = 0;
-        if (read_Word(data, off_p, clazz, encoding, &tmp))
+        if (read_Word(data, off_p, &tmp))
             return 1;
 
         out->sh_flags = UINT64_C(0) | tmp;
     }
 
-    if (read_Addr(data, off_p, clazz, encoding, &out->sh_addr) ||
-        read_Off(data, off_p, clazz, encoding, &out->sh_offset))
+    if (read_Addr(data, off_p, &out->sh_addr) ||
+        read_Off(data, off_p, &out->sh_offset))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (read_Xword(data, off_p, clazz, encoding, &out->sh_size))
+    if (data->clazz == ELFCLASS64) {
+        if (read_Xword(data, off_p, &out->sh_size))
             return 1;
-    } else /* if (clazz == ELFCLASS32) */ {
+    } else /* if (data->clazz == ELFCLASS32) */ {
         Elf64_Word tmp = 0;
-        if (read_Word(data, off_p, clazz, encoding, &tmp))
+        if (read_Word(data, off_p, &tmp))
             return 1;
 
         out->sh_size = UINT64_C(0) | tmp;
     }
 
-    if (read_Word(data, off_p, clazz, encoding, &out->sh_link) ||
-        read_Word(data, off_p, clazz, encoding, &out->sh_info))
+    if (read_Word(data, off_p, &out->sh_link) ||
+        read_Word(data, off_p, &out->sh_info))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (read_Xword(data, off_p, clazz, encoding, &out->sh_addralign) ||
-            read_Xword(data, off_p, clazz, encoding, &out->sh_entsize))
+    if (data->clazz == ELFCLASS64) {
+        if (read_Xword(data, off_p, &out->sh_addralign) ||
+            read_Xword(data, off_p, &out->sh_entsize))
         {
             return 1;
         }
-    } else /* if (clazz == ELFCLASS32) */ {
+    } else /* if (data->clazz == ELFCLASS32) */ {
         Elf64_Word tmp_addralign = 0, tmp_entsize = 0;
-        if (read_Word(data, off_p, clazz, encoding, &tmp_addralign) ||
-            read_Word(data, off_p, clazz, encoding, &tmp_entsize))
+        if (read_Word(data, off_p, &tmp_addralign) ||
+            read_Word(data, off_p, &tmp_entsize))
             return 1;
 
         out->sh_addralign = UINT64_C(0) | tmp_addralign;
@@ -473,38 +461,37 @@ int read_shdr(const struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int write_shdr(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Shdr *shdr)
+int write_shdr(ElfFileData *data, Elf64_Off *off_p, const Elf64_Shdr *shdr)
 {
-    if (write_Word(data, off_p, clazz, encoding, shdr->sh_name) ||
-        write_Word(data, off_p, clazz, encoding, shdr->sh_type))
+    if (write_Word(data, off_p, shdr->sh_name) ||
+        write_Word(data, off_p, shdr->sh_type))
     {
         return 1;
     }
 
     /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
-    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_flags))
+    if (write_Addr(data, off_p, shdr->sh_flags))
         return 1;
 
-    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_addr) ||
-        write_Off(data, off_p, clazz, encoding, shdr->sh_offset))
+    if (write_Addr(data, off_p, shdr->sh_addr) ||
+        write_Off(data, off_p, shdr->sh_offset))
     {
         return 1;
     }
 
     /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
-    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_size))
+    if (write_Addr(data, off_p, shdr->sh_size))
         return 1;
 
-    if (write_Word(data, off_p, clazz, encoding, shdr->sh_link) ||
-        write_Word(data, off_p, clazz, encoding, shdr->sh_info))
+    if (write_Word(data, off_p, shdr->sh_link) ||
+        write_Word(data, off_p, shdr->sh_info))
     {
         return 1;
     }
 
     /* will write 8 bytes for ELFCLASS64 and 4 bytes for ELFCLASS32 */
-    if (write_Addr(data, off_p, clazz, encoding, shdr->sh_addralign) ||
-        write_Addr(data, off_p, clazz, encoding, shdr->sh_entsize))
+    if (write_Addr(data, off_p, shdr->sh_addralign) ||
+        write_Addr(data, off_p, shdr->sh_entsize))
         return 1;
 
     return 0;
@@ -525,12 +512,10 @@ static_assert(offsetof(Elf64_Dyn, d_un.d_val) ==
                 offsetof(Elf64_Dyn, d_un.d_ptr),
         "Elf64_Dyn: d_val and d_ptr are at different offsets");
 
-int read_dyn(const struct blob *data, uint64_t *off_p,
-             int clazz, int encoding, Elf64_Dyn *out)
-{
-    if (clazz == ELFCLASS32) {
+int read_dyn(const ElfFileData *data, Elf64_Off *off_p, Elf64_Dyn *out) {
+    if (data->clazz == ELFCLASS32) {
         Elf64_Sword d_tag = 0;
-        if (read_Sword(data, off_p, clazz, encoding, &d_tag))
+        if (read_Sword(data, off_p, &d_tag))
             return 1;
         out->d_tag = (Elf32_Sword)d_tag;
 
@@ -538,38 +523,36 @@ int read_dyn(const struct blob *data, uint64_t *off_p,
          * which are both `uint32_t`s,
          * so it's safe to unconditionally just read a 32-bit Word */
         Elf64_Word d_un_val = 0;
-        if (read_Word(data, off_p, clazz, encoding, &d_un_val))
+        if (read_Word(data, off_p, &d_un_val))
             return 1;
 
         out->d_un.d_val = d_un_val;
 
-    } else /* if (clazz == ELFCLASS64) */ {
-        if (read_Sxword(data, off_p, clazz, encoding, &out->d_tag))
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (read_Sxword(data, off_p, &out->d_tag))
             return 1;
 
         /* Elf64_Dyn.d_un is a union of Elf64_Xword and Elf64_Addr
-         * which are both `uint64_t`s,
+         * which are both `Elf64_Off`s,
          * so it's safe to unconditionally just read a 64-bit Xword */
-        if (read_Xword(data, off_p, clazz, encoding, &out->d_un.d_val))
+        if (read_Xword(data, off_p, &out->d_un.d_val))
             return 1;
     }
 
     return 0;
 }
 
-int write_dyn(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Dyn *dyn)
-{
+int write_dyn(ElfFileData *data, Elf64_Off *off_p, const Elf64_Dyn *dyn) {
     pr_debug("%s: tag: %s: writing 0x%" PRIx64 "\n", __func__,
             dynamic_tag_to_string(dyn->d_tag), dyn->d_un.d_val);
-    if (clazz == ELFCLASS32) {
+    if (data->clazz == ELFCLASS32) {
         if (dyn->d_tag > INT32_MAX || dyn->d_tag < INT32_MIN) {
             pr_error("%s: d_tag value outside of 32-bit integer limits\n",
                     __func__);
             return 1;
         }
 
-        if (write_Sword(data, off_p, clazz, encoding, (Elf32_Sword)dyn->d_tag))
+        if (write_Sword(data, off_p, (Elf32_Sword)dyn->d_tag))
             return 1;
 
         /* See the above `read_dyn` */
@@ -578,37 +561,34 @@ int write_dyn(struct blob *data, uint64_t *off_p,
                     __func__);
             return 1;
         }
-        if (write_Word(data, off_p, clazz, encoding,
-                       (Elf32_Word)dyn->d_un.d_val))
+        if (write_Word(data, off_p, (Elf32_Word)dyn->d_un.d_val))
             return 1;
-    } else /* if (clazz == ELFCLASS64) */ {
-        if (write_Sxword(data, off_p, clazz, encoding, dyn->d_tag))
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (write_Sxword(data, off_p, dyn->d_tag))
             return 1;
 
         /* See the above `read_dyn` */
-        if (write_Xword(data, off_p, clazz, encoding, dyn->d_un.d_val))
+        if (write_Xword(data, off_p, dyn->d_un.d_val))
             return 1;
     }
 
     return 0;
 }
 
-int read_sym(const struct blob *data, uint64_t *off_p,
-             int clazz, int encoding, Elf64_Sym *out)
-{
+int read_sym(const ElfFileData *data, Elf64_Off *off_p, Elf64_Sym *out) {
 
     /* if you're wondering what's going on here, just look at the definitions
      * of `Elf32_Sym` and `Elf64_Sym` */
 
-    if (read_Word(data, off_p, clazz, encoding, &out->st_name))
+    if (read_Word(data, off_p, &out->st_name))
         return 1;
 
-    if (clazz == ELFCLASS32) {
-        if (read_Addr(data, off_p, clazz, encoding, &out->st_value))
+    if (data->clazz == ELFCLASS32) {
+        if (read_Addr(data, off_p, &out->st_value))
             return 1;
 
         Elf32_Word tmp_size;
-        if (read_Word(data, off_p, clazz, encoding, &tmp_size))
+        if (read_Word(data, off_p, &tmp_size))
             return 1;
         out->st_size = (Elf64_Xword)tmp_size;
 
@@ -616,14 +596,14 @@ int read_sym(const struct blob *data, uint64_t *off_p,
 
     if (read_byte(data, off_p, &out->st_info) ||
         read_byte(data, off_p, &out->st_other) ||
-        read_Section(data, off_p, clazz, encoding, &out->st_shndx))
+        read_Section(data, off_p, &out->st_shndx))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (read_Addr(data, off_p, clazz, encoding, &out->st_value) ||
-            read_Xword(data, off_p, clazz, encoding, &out->st_size))
+    if (data->clazz == ELFCLASS64) {
+        if (read_Addr(data, off_p, &out->st_value) ||
+            read_Xword(data, off_p, &out->st_size))
         {
             return 1;
         }
@@ -632,24 +612,22 @@ int read_sym(const struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int write_sym(struct blob *data, uint64_t *off_p,
-              int clazz, int encoding, const Elf64_Sym *sym)
-{
+int write_sym(ElfFileData *data, Elf64_Off *off_p, const Elf64_Sym *sym) {
     /* if you're wondering what's going on here, just look at the definitions
      * of `Elf32_Sym` and `Elf64_Sym` */
 
-    if (write_Word(data, off_p, clazz, encoding, sym->st_name))
+    if (write_Word(data, off_p, sym->st_name))
         return 1;
 
-    if (clazz == ELFCLASS32) {
+    if (data->clazz == ELFCLASS32) {
         if (sym->st_size > UINT32_MAX) {
             pr_error("%s: st_size value outside of 32-bit integer limit\n",
                     __func__);
             return 1;
         }
 
-        if (write_Addr(data, off_p, clazz, encoding, sym->st_value) ||
-            write_Word(data, off_p, clazz, encoding, (Elf32_Word)sym->st_size))
+        if (write_Addr(data, off_p, sym->st_value) ||
+            write_Word(data, off_p, (Elf32_Word)sym->st_size))
         {
             return 1;
         }
@@ -657,14 +635,14 @@ int write_sym(struct blob *data, uint64_t *off_p,
 
     if (write_byte(data, off_p, sym->st_info) ||
         write_byte(data, off_p, sym->st_other) ||
-        write_Section(data, off_p, clazz, encoding, sym->st_shndx))
+        write_Section(data, off_p, sym->st_shndx))
     {
         return 1;
     }
 
-    if (clazz == ELFCLASS64) {
-        if (write_Addr(data, off_p, clazz, encoding, sym->st_value) ||
-            write_Xword(data, off_p, clazz, encoding, sym->st_size))
+    if (data->clazz == ELFCLASS64) {
+        if (write_Addr(data, off_p, sym->st_value) ||
+            write_Xword(data, off_p, sym->st_size))
         {
             return 1;
         }
@@ -673,66 +651,60 @@ int write_sym(struct blob *data, uint64_t *off_p,
     return 0;
 }
 
-int write_verdef(struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, const Elf64_Verdef *vd)
+int write_verdef(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdef *vd)
 {
     return 0
-        || write_Half(data, off_p, clazz, encoding, vd->vd_version)
-        || write_Half(data, off_p, clazz, encoding, vd->vd_flags)
-        || write_Half(data, off_p, clazz, encoding, vd->vd_ndx)
-        || write_Half(data, off_p, clazz, encoding, vd->vd_cnt)
-        || write_Word(data, off_p, clazz, encoding, vd->vd_hash)
-        || write_Word(data, off_p, clazz, encoding, vd->vd_aux)
-        || write_Word(data, off_p, clazz, encoding, vd->vd_next);
+        || write_Half(data, off_p, vd->vd_version)
+        || write_Half(data, off_p, vd->vd_flags)
+        || write_Half(data, off_p, vd->vd_ndx)
+        || write_Half(data, off_p, vd->vd_cnt)
+        || write_Word(data, off_p, vd->vd_hash)
+        || write_Word(data, off_p, vd->vd_aux)
+        || write_Word(data, off_p, vd->vd_next);
 }
 
-int read_verdef(const struct blob *data, uint64_t *off_p,
-                int clazz, int encoding, Elf64_Verdef *out)
+int read_verdef(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdef *out)
 {
     return 0
-        || read_Half(data, off_p, clazz, encoding, &out->vd_version)
-        || read_Half(data, off_p, clazz, encoding, &out->vd_flags)
-        || read_Half(data, off_p, clazz, encoding, &out->vd_ndx)
-        || read_Half(data, off_p, clazz, encoding, &out->vd_cnt)
-        || read_Word(data, off_p, clazz, encoding, &out->vd_hash)
-        || read_Word(data, off_p, clazz, encoding, &out->vd_aux)
-        || read_Word(data, off_p, clazz, encoding, &out->vd_next);
+        || read_Half(data, off_p, &out->vd_version)
+        || read_Half(data, off_p, &out->vd_flags)
+        || read_Half(data, off_p, &out->vd_ndx)
+        || read_Half(data, off_p, &out->vd_cnt)
+        || read_Word(data, off_p, &out->vd_hash)
+        || read_Word(data, off_p, &out->vd_aux)
+        || read_Word(data, off_p, &out->vd_next);
 }
 
-int write_verdaux(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Verdaux *vda)
+int write_verdaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdaux *vda)
 {
-    return write_Word(data, off_p, clazz, encoding, vda->vda_name) ||
-           write_Word(data, off_p, clazz, encoding, vda->vda_next);
+    return write_Word(data, off_p, vda->vda_name) ||
+           write_Word(data, off_p, vda->vda_next);
 }
 
-int read_verdaux(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Verdaux *out)
+int read_verdaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdaux *out)
 {
-    return read_Word(data, off_p, clazz, encoding, &out->vda_name) ||
-           read_Word(data, off_p, clazz, encoding, &out->vda_next);
+    return read_Word(data, off_p, &out->vda_name) ||
+           read_Word(data, off_p, &out->vda_next);
 }
 
-int write_verneed(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Verneed *vn)
+int write_verneed(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verneed *vn)
 {
     return 0
-        || write_Half(data, off_p, clazz, encoding, vn->vn_version)
-        || write_Half(data, off_p, clazz, encoding, vn->vn_cnt)
-        || write_Word(data, off_p, clazz, encoding, vn->vn_file)
-        || write_Word(data, off_p, clazz, encoding, vn->vn_aux)
-        || write_Word(data, off_p, clazz, encoding, vn->vn_next);
+        || write_Half(data, off_p, vn->vn_version)
+        || write_Half(data, off_p, vn->vn_cnt)
+        || write_Word(data, off_p, vn->vn_file)
+        || write_Word(data, off_p, vn->vn_aux)
+        || write_Word(data, off_p, vn->vn_next);
 }
 
-int read_verneed(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Verneed *out)
+int read_verneed(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verneed *out)
 {
     const int ret = 0
-        || read_Half(data, off_p, clazz, encoding, &out->vn_version)
-        || read_Half(data, off_p, clazz, encoding, &out->vn_cnt)
-        || read_Word(data, off_p, clazz, encoding, &out->vn_file)
-        || read_Word(data, off_p, clazz, encoding, &out->vn_aux)
-        || read_Word(data, off_p, clazz, encoding, &out->vn_next);
+        || read_Half(data, off_p, &out->vn_version)
+        || read_Half(data, off_p, &out->vn_cnt)
+        || read_Word(data, off_p, &out->vn_file)
+        || read_Word(data, off_p, &out->vn_aux)
+        || read_Word(data, off_p, &out->vn_next);
 #if 0
     if (!ret) {
         pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
@@ -747,26 +719,24 @@ int read_verneed(const struct blob *data, uint64_t *off_p,
     return ret;
 }
 
-int write_vernaux(struct blob *data, uint64_t *off_p,
-                  int clazz, int encoding, const Elf64_Vernaux *vna)
+int write_vernaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Vernaux *vna)
 {
     return 0
-        || write_Word(data, off_p, clazz, encoding, vna->vna_hash)
-        || write_Half(data, off_p, clazz, encoding, vna->vna_flags)
-        || write_Half(data, off_p, clazz, encoding, vna->vna_other)
-        || write_Word(data, off_p, clazz, encoding, vna->vna_name)
-        || write_Word(data, off_p, clazz, encoding, vna->vna_next);
+        || write_Word(data, off_p, vna->vna_hash)
+        || write_Half(data, off_p, vna->vna_flags)
+        || write_Half(data, off_p, vna->vna_other)
+        || write_Word(data, off_p, vna->vna_name)
+        || write_Word(data, off_p, vna->vna_next);
 }
 
-int read_vernaux(const struct blob *data, uint64_t *off_p,
-                 int clazz, int encoding, Elf64_Vernaux *out)
+int read_vernaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Vernaux *out)
 {
     const int ret = 0
-        || read_Word(data, off_p, clazz, encoding, &out->vna_hash)
-        || read_Half(data, off_p, clazz, encoding, &out->vna_flags)
-        || read_Half(data, off_p, clazz, encoding, &out->vna_other)
-        || read_Word(data, off_p, clazz, encoding, &out->vna_name)
-        || read_Word(data, off_p, clazz, encoding, &out->vna_next);
+        || read_Word(data, off_p, &out->vna_hash)
+        || read_Half(data, off_p, &out->vna_flags)
+        || read_Half(data, off_p, &out->vna_other)
+        || read_Word(data, off_p, &out->vna_name)
+        || read_Word(data, off_p, &out->vna_next);
 #if 0
     if (!ret) {
         pr_debug("\n%s: *off_p: 0x%" PRIx64 "\n", __func__, *off_p);
@@ -1182,24 +1152,23 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
     }
 }
 
-static int read_byte(const struct blob *data, uint64_t *off_p, uint8_t *out)
+static int read_byte(const ElfFileData *data, Elf64_Off *off_p, uint8_t *out)
 {
     if (*off_p >= data->size) {
         pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n", __func__, *off_p);
         return 1;
     }
 
-    *out = data->data[(*off_p)++];
+    *out = data->buf[(*off_p)++];
     return 0;
 }
 
-static int write_byte(struct blob *data, uint64_t *off_p, uint8_t val)
-{
+static int write_byte(ElfFileData *data, Elf64_Off *off_p, uint8_t val) {
     if (*off_p >= data->size) {
         pr_error("%s: ([0x%" PRIx64 "]) Not enough data\n", __func__, *off_p);
         return 1;
     }
 
-    data->data[(*off_p)++] = val;
+    data->buf[(*off_p)++] = val;
     return 0;
 }

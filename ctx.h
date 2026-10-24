@@ -661,8 +661,8 @@ struct elf {
         } symtab_shndx; /**< Data related to the dynsym SYMTAB_SHNDX section. */
     } dyn; /**< Everything related to the dynamic section */
 
-    /** The raw bytes of the ELF file **/
-    struct blob data;
+    /** The raw bytes of the ELF file */
+    ElfFileData data;
 };
 
 /**

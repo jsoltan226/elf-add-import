@@ -86,38 +86,30 @@ const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx)
 
 void destroy_elf(struct elf *elf)
 {
-    if (elf->data.data != NULL)
-        free(elf->data.data);
+#define free_if_null(ptr) \
+    if (ptr != NULL) {    \
+        free(ptr);        \
+        ptr = NULL;       \
+    }
 
-    if (elf->phdrs.arr != NULL)
-        free(elf->phdrs.arr);
+    free_if_null(elf->data.buf);
 
-    if (elf->shdrs.arr != NULL)
-        free(elf->shdrs.arr);
+    free_if_null(elf->phdrs.arr);
+    free_if_null(elf->shdrs.arr);
 
-    if (elf->dyn.entries.arr != NULL)
-        free(elf->dyn.entries.arr);
+    free_if_null(elf->dyn.entries.arr);
 
-    if (elf->dyn.symtab.syms != NULL)
-        free(elf->dyn.symtab.syms);
+    free_if_null(elf->dyn.symtab.syms);
 
-    if (elf->dyn.hash.buckets != NULL)
-        free(elf->dyn.hash.buckets);
+    free_if_null(elf->dyn.hash.buckets);
+    free_if_null(elf->dyn.hash.chain);
+    free_if_null(elf->dyn.gnu_hash.bloom);
+    free_if_null(elf->dyn.gnu_hash.buckets);
+    free_if_null(elf->dyn.gnu_hash.chain);
 
-    if (elf->dyn.hash.chain != NULL)
-        free(elf->dyn.hash.chain);
+    free_if_null(elf->dyn.symtab_shndx.arr);
 
-    if (elf->dyn.gnu_hash.bloom != NULL)
-        free(elf->dyn.gnu_hash.bloom);
-
-    if (elf->dyn.gnu_hash.buckets != NULL)
-        free(elf->dyn.gnu_hash.buckets);
-
-    if (elf->dyn.gnu_hash.chain != NULL)
-        free(elf->dyn.gnu_hash.chain);
-
-    if (elf->dyn.symtab_shndx.arr != NULL)
-        free(elf->dyn.symtab_shndx.arr);
+#undef free_if_null
 
     memset(elf, 0, sizeof(struct elf));
 }

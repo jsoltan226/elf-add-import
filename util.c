@@ -8,9 +8,9 @@
 #include <string.h>
 #include <stdint.h>
 
-int read_file(const char *path, struct blob *out)
+int read_file(const char *path, uint8_t **out_buf, uint64_t *out_size)
 {
-    if (path == NULL || out == NULL) {
+    if (path == NULL || out_buf == NULL) {
         pr_error("[%s] Invalid parameters\n", __func__);
         return -1;
     }
@@ -19,8 +19,8 @@ int read_file(const char *path, struct blob *out)
     uint8_t *buf = NULL;
     size_t size = 0;
 
-    out->data = NULL;
-    out->size = 0;
+    *out_buf = NULL;
+    *out_size = 0;
 
     if ((fp = fopen(path, "rb")) == NULL) {
         pr_error("Failed to open input file \"%s\": %d (%s)\n",
@@ -72,8 +72,8 @@ int read_file(const char *path, struct blob *out)
     }
     fp = NULL;
 
-    out->data = buf; buf = NULL;
-    out->size = size;
+    *out_buf = buf; buf = NULL;
+    *out_size = (uint64_t)size;
 
     return 0;
 
@@ -94,9 +94,9 @@ err:
     return 1;
 }
 
-int write_file(const char *path, const struct blob *data)
+int write_file(const char *path, const uint8_t *buf, uint64_t size)
 {
-    if (path == NULL || data == NULL) {
+    if (path == NULL || buf == NULL || size == 0 || size > SIZE_MAX) {
         pr_error("[%s] Invalid parameters\n", __func__);
         return -1;
     }
@@ -109,12 +109,7 @@ int write_file(const char *path, const struct blob *data)
         goto err;
     }
 
-    if (data->size > SIZE_MAX || data->size == 0 || data->data == NULL) {
-        pr_error("Invalid data blob\n");
-        goto err;
-    }
-
-    if (fwrite(data->data, data->size, 1, fp) != 1) {
+    if (fwrite(buf, size, 1, fp) != 1) {
         pr_error("Failed to write to output file \"%s\": %d (%s)\n",
                 path, errno, strerror(errno));
         goto err;
@@ -178,7 +173,7 @@ err:
 
 int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
                  Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
-                 const struct elf_phdrs *phdrs, const struct blob *data,
+                 const struct elf_phdrs *phdrs, const ElfFileData *data,
                  void **ptr_p, Elf64_Xword *out_new_file_size)
 {
     if (mementsz == 0 || fileentsz == 0 || ptr_p == NULL ||
@@ -398,7 +393,7 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
     const Elf64_Shdr *shstrtab = &elf->shdrs.arr[elf->ehdr.e_shstrndx];
     if (shstrtab->sh_offset >= elf->data.size ||
         shstrtab->sh_size >= elf->data.size - shstrtab->sh_offset ||
-        elf->data.data == NULL)
+        elf->data.buf == NULL)
     {
         return "N/A (shstrtab section overflows ELF file)";
     }
@@ -409,10 +404,10 @@ const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
     if (sh_name >= shstrtab->sh_size)
         return "N/A (section name offset overflows shstrtab section)";
 
-    if (elf->data.data[shstrtab->sh_offset + shstrtab->sh_size - 1] != '\0')
+    if (elf->data.buf[shstrtab->sh_offset + shstrtab->sh_size - 1] != '\0')
         return "N/A (shstrtab not NULL-terminated)";
 
-    return (const char *)&elf->data.data[shstrtab->sh_offset + sh_name];
+    return (const char *)&elf->data.buf[shstrtab->sh_offset + sh_name];
 }
 
 void find_load_segment_limits(const struct elf *elf,

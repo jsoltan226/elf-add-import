@@ -66,11 +66,7 @@ static int validate_sht_dynamic_if_exists(
  * pointed to by a PT_DYNAMIC program header.
  * Part of `parse_dyn`.
  *
- * @param[in] data The ELF file's data. Must not be NULL.
- *
- * @param[in] clazz The ELF file's class.
- *
- * @param[in] encoding The ELF file's byte order.
+ * @param[in] data The ELF file data. Must not be NULL.
  *
  * @param[in] count Number of dynamic entries.
  *
@@ -84,7 +80,7 @@ static int validate_sht_dynamic_if_exists(
  * @return 0 on success, non-zero on failure.
  */
 static int parse_dyn_table(
-        const struct blob *data, int clazz, int encoding, Elf64_Xword count,
+        const ElfFileData *data, Elf64_Xword count,
         const struct elf_phdrs *phdrs, elf_idx_t pt_dynamic_idx,
 
         struct elf_dyn_entries *out
@@ -111,7 +107,7 @@ static int parse_dyn_table(
  *  non-zero on failure (missing or invalid dynamic string table).
  */
 static int parse_dynstr(
-        const struct blob *data, const struct elf_dyn_entries *entries,
+        const ElfFileData *data, const struct elf_dyn_entries *entries,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
 
         struct elf_dyn_strtab *out
@@ -141,13 +137,11 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
                                      Elf64_Addr addr, Elf64_Off off,
                                      Elf64_Xword size, elf_idx_t *out);
 
-int parse_dyn(
-        const struct blob *data, int clazz, int encoding,
-        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+int parse_dyn(const ElfFileData *data,
+              const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
 
-        struct elf_dynamic *out,
-        Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize
-)
+              struct elf_dynamic *out,
+              Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize)
 {
     if (data == NULL || phdrs == NULL || shdrs == NULL) {
         pr_error("%s: Invalid parameters!\n", __func__);
@@ -168,7 +162,7 @@ int parse_dyn(
     if (out_dynsymentsize != NULL) *out_dynsymentsize = 0;
     int ret = 1;
 
-    const Elf64_Half entsize = clazz == ELFCLASS32 ?
+    const Elf64_Half entsize = data->clazz == ELFCLASS32 ?
         sizeof(Elf32_Dyn) : sizeof(Elf64_Dyn);
 
     /* Find and validate the PT_DYNAMIC program header */
@@ -187,9 +181,7 @@ int parse_dyn(
     }
 
     /* Parse the ElfXX_Dyn entries */
-    if (parse_dyn_table(data, clazz, encoding, dynnum, phdrs, dyn.phdr,
-                        &dyn.entries))
-    {
+    if (parse_dyn_table(data, dynnum, phdrs, dyn.phdr, &dyn.entries)) {
         pr_error("Failed to parse the dynamic entry array\n");
         goto err;
     }
@@ -209,7 +201,7 @@ int parse_dyn(
 
     /* Parse the dynamic symbol table (.dynsym),
      * along with the named symbol lookup table(s) `DT(GNU_)HASH` */
-    if (parse_dynsym(data, clazz, encoding,
+    if (parse_dynsym(data,
                      phdrs, shdrs, &dyn.entries, &dyn.strtab,
                      &dyn.hash, &dyn.gnu_hash, &dyn.symtab_shndx, &dyn.symtab))
     {
@@ -361,7 +353,7 @@ do {                                                                    \
 }
 
 static int parse_dyn_table(
-        const struct blob *data, int clazz, int encoding, Elf64_Xword dynnum,
+        const ElfFileData *data, Elf64_Xword dynnum,
         const struct elf_phdrs *phdrs, elf_idx_t pt_dynamic_idx,
 
         struct elf_dyn_entries *out
@@ -390,7 +382,7 @@ static int parse_dyn_table(
         bool terminated = false;
         for (Elf64_Xword i = 0; i < dynnum; i++) {
             Elf64_Dyn tmp;
-            if (read_dyn(data, &off, clazz, encoding, &tmp)) {
+            if (read_dyn(data, &off, &tmp)) {
                 pr_error("Failed to parse dynamic entry "
                          "no %" PRIu64 " at offset 0x%" PRIx64 "\n", i, off);
                 goto err;
@@ -436,7 +428,7 @@ err:
 }
 
 static int parse_dynstr(
-        const struct blob *data, const struct elf_dyn_entries *entries,
+        const ElfFileData *data, const struct elf_dyn_entries *entries,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
 
         struct elf_dyn_strtab *out
@@ -487,8 +479,8 @@ static int parse_dynstr(
     }
 
     /* String tables must begin and end with NUL bytes */
-    if (data->data[strtab_off] != '\0' ||
-        data->data[strtab_off + strtab_size - 1] != '\0')
+    if (data->buf[strtab_off] != '\0' ||
+        data->buf[strtab_off + strtab_size - 1] != '\0')
     {
         pr_error("Dynamic string table doesn't begin and end with NUL bytes\n");
         return 1;

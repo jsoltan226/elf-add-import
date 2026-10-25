@@ -1243,7 +1243,7 @@ static int validate_shdr(
     int ret = 0;
 
     if (shdr->sh_type != SHT_NOBITS &&
-            (shdr->sh_offset >= data->size ||
+            (shdr->sh_offset > data->size ||
              data->size - shdr->sh_offset < shdr->sh_size))
     {
         pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
@@ -1257,7 +1257,9 @@ static int validate_shdr(
         ret = 1;
     }
 
-    if (shstrtab != NULL && shdr->sh_name >= shstrtab->sh_size) {
+    if (shstrtab != NULL && shdr->sh_name != 0 &&
+            shdr->sh_name >= shstrtab->sh_size)
+    {
         pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
                  "Section name outside of the .shstrtab section bounds\n",
                  i, off);

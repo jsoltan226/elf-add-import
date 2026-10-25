@@ -111,5 +111,5 @@ void destroy_elf(struct elf *elf)
 
 #undef free_if_null
 
-    memset(elf, 0, sizeof(struct elf));
+    *elf = (struct elf) { 0 };
 }

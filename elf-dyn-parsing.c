@@ -242,7 +242,7 @@ err:
     if (!ret && out_dynsymentsize != NULL)
         *out_dynsymentsize = dyn.symtab.entsize;
 
-    memset(&dyn, 0, sizeof(struct elf_dynamic));
+    dyn = (struct elf_dynamic) { 0 };
 
     return ret;
 }

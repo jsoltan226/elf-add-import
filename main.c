@@ -494,7 +494,7 @@ int main(int argc, char **argv)
         list_sections(&elf);
 
         if (parse_ver(&elf.phdrs, &elf.shdrs, &elf.dyn.strtab,
-                      &elf.dyn.entries, &elf.data))
+                      &elf.dyn.entries, &elf.data, NULL))
         {
             pr_error("parse_ver has failed\n");
             /* goto err; */

@@ -34,7 +34,7 @@ dummy_pr_debug__(const char *fmt, ...) { (void) fmt; }
 /** @struct ELF file data buffer along with metadata needed to parse it */
 typedef struct elf_file_data {
     /** The size of `buf` */
-    uint64_t size;
+    size_t size;
 
     /** The (usually malloc'd) buffer containing the bytes */
     uint8_t *buf;

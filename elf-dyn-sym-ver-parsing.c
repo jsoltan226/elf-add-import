@@ -1265,7 +1265,8 @@ static int read_validate_verdef_entry(
 {
     Elf64_Verdef vd = { 0 };
     Elf64_Verdaux *aux_list = NULL;
-    Elf64_Off aux_list_end = 0;
+    Elf64_Off aux_list_off = 0;
+    Elf64_Xword aux_list_size = 0;
 
     *out = (struct elf_dyn_sym_ver_def_ent) { 0 };
 
@@ -1326,7 +1327,8 @@ static int read_validate_verdef_entry(
 
     /* `vd.vd_aux`, `vd.vd_cnt`, `vd.vd_hash` */
     aux_list = NULL;
-    aux_list_end = 0;
+    aux_list_off = 0;
+    aux_list_size = 0;
     {
         if (vd.vd_cnt == 0) {
             pr_error("Number of auxiliary entries is 0\n");
@@ -1340,15 +1342,21 @@ static int read_validate_verdef_entry(
             pr_error("Auxiliary array offset overflows load segment\n");
             goto err;
         }
-        const Elf64_Off aux_off = *off_p + vd.vd_aux;
+        aux_list_off = *off_p + vd.vd_aux;
 
         /* also validates `vd_hash` */
-        if (read_verdaux_list(ctx, vd.vd_hash, seg_end, aux_off,
+        Elf64_Off aux_list_end = 0;
+        if (read_verdaux_list(ctx, vd.vd_hash, seg_end, aux_list_off,
                               vd.vd_cnt, max_end_p, &aux_list, &aux_list_end))
         {
             pr_error("Failed to read auxiliary information entry list\n");
             goto err;
+        } else if (aux_list_end <= aux_list_off) {
+            /* `ranges_overlap` requires `size` to be > 0, so use `<=` */
+            pr_error("Auxiliary list has invalid size (impossible outcome)\n");
+            goto err;
         }
+        aux_list_size = aux_list_end - aux_list_off;
     }
 
     /* `vd.vd_next` */
@@ -1374,7 +1382,9 @@ static int read_validate_verdef_entry(
                 goto err;
             }
             const Elf64_Off next_off = *off_p + vd.vd_next;
-            if (next_off < aux_list_end) {
+            if (ranges_overlap(next_off, VERDEF_ENTSIZE,
+                               aux_list_off, aux_list_size))
+            {
                 pr_error("Next verdef entry overlaps current one's aux list\n");
                 goto err;
             }
@@ -1948,7 +1958,8 @@ static int read_validate_verneed_entry(
 {
     Elf64_Verneed vn = { 0 };
     Elf64_Vernaux *aux_list = NULL;
-    Elf64_Off aux_list_end = 0;
+    Elf64_Off aux_list_off = 0;
+    Elf64_Xword aux_list_size = 0;
 
     *out = (struct elf_dyn_sym_ver_need_ent) { 0 };
 
@@ -1987,7 +1998,8 @@ static int read_validate_verneed_entry(
 
     /* `vn.vn_aux`, `vn.vn_cnt` */
     aux_list = NULL;
-    aux_list_end = 0;
+    aux_list_off = 0;
+    aux_list_size = 0;
     {
         if (vn.vn_aux < VERNEED_ENTSIZE) {
             pr_error("Start of auxiliary list inside verneed entry\n");
@@ -1996,19 +2008,25 @@ static int read_validate_verneed_entry(
             pr_error("Start of auxiliary list outside of load segment bounds\n");
             goto err;
         }
-        const Elf64_Off aux_off = *off_p + vn.vn_aux;
+        aux_list_off = *off_p + vn.vn_aux;
 
         if (vn.vn_cnt == 0) {
             pr_error("Number of auxiliary entries is 0\n");
             goto err;
         }
 
-        if (read_vernaux_list(ctx, seg_end, aux_off, vn.vn_cnt, max_end_p,
+        Elf64_Off aux_list_end = 0;
+        if (read_vernaux_list(ctx, seg_end, aux_list_off, vn.vn_cnt, max_end_p,
                               &aux_list, &aux_list_end))
         {
             pr_error("Failed to read the auxiliary information entries list\n");
             goto err;
+        } else if (aux_list_end <= aux_list_off) {
+            /* `ranges_overlap` requires `size` to be > 0, so use `<=` */
+            pr_error("Auxiliary list has invalid size (impossible outcome)\n");
+            goto err;
         }
+        aux_list_size = aux_list_end - aux_list_off;
     }
 
     /* `vn.vn_next` */
@@ -2033,7 +2051,9 @@ static int read_validate_verneed_entry(
                 goto err;
             }
             const Elf64_Off next_off = *off_p + vn.vn_next;
-            if (next_off < aux_list_end) {
+            if (ranges_overlap(next_off, VERNEED_ENTSIZE,
+                               aux_list_off, aux_list_size))
+            {
                 pr_error("Next verneed entry overlaps current one's "
                          "aux list\n");
                 goto err;

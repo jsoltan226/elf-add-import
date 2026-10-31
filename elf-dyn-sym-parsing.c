@@ -1916,7 +1916,7 @@ static int read_dynamic_symbol_table(
         }
 
         if (arr[i].st_name >= dynstr_size) {
-            pr_error("Dynamic symbol entry no %" PRIu64 "'s st_name "
+            pr_error("Dynamic symbol no %" PRIu64 "'s st_name "
                      "overflows the dynamic string table\n", i);
             goto err;
         }
@@ -1979,11 +1979,11 @@ static int read_dynamic_symbol_table(
             /* Only accept invalid section indices if there are no
              * section headers at all (presumably they've been stripped out). */
             if (n_shdrs > 0) {
-                pr_error("Dynamic symbol entry no %" PRIu64 "'s st_shndx "
+                pr_error("Dynamic symbol no %" PRIu64 "'s st_shndx "
                          "points to an invalid section\n", i);
                 goto err;
             } else {
-                pr_error("WARNING: symbol entry no %" PRIu64 " "
+                pr_error("WARNING: Dynamic symbol no %" PRIu64 " "
                          "references section %" PRIu32 ", "
                          "but no section headers are present\n",
                          i, arr[i].st_shndx);

@@ -86,28 +86,28 @@ const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx)
 
 void destroy_elf(struct elf *elf)
 {
-#define free_if_null(ptr) \
+#define free_if_nonnull(ptr) \
     if (ptr != NULL) {    \
         free(ptr);        \
         ptr = NULL;       \
     }
 
-    free_if_null(elf->data.buf);
+    free_if_nonnull(elf->data.buf);
 
-    free_if_null(elf->phdrs.arr);
-    free_if_null(elf->shdrs.arr);
+    free_if_nonnull(elf->phdrs.arr);
+    free_if_nonnull(elf->shdrs.arr);
 
-    free_if_null(elf->dyn.entries.arr);
+    free_if_nonnull(elf->dyn.entries.arr);
 
-    free_if_null(elf->dyn.symtab.syms);
+    free_if_nonnull(elf->dyn.symtab.syms);
 
-    free_if_null(elf->dyn.hash.buckets);
-    free_if_null(elf->dyn.hash.chain);
-    free_if_null(elf->dyn.gnu_hash.bloom);
-    free_if_null(elf->dyn.gnu_hash.buckets);
-    free_if_null(elf->dyn.gnu_hash.chain);
+    free_if_nonnull(elf->dyn.hash.buckets);
+    free_if_nonnull(elf->dyn.hash.chain);
+    free_if_nonnull(elf->dyn.gnu_hash.bloom);
+    free_if_nonnull(elf->dyn.gnu_hash.buckets);
+    free_if_nonnull(elf->dyn.gnu_hash.chain);
 
-    free_if_null(elf->dyn.symtab_shndx.arr);
+    free_if_nonnull(elf->dyn.symtab_shndx.arr);
 
 #undef free_if_null
 

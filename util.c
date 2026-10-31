@@ -369,7 +369,7 @@ int find_unique_dyn_entries(
 
     for (size_t i = 0; i < count; i++) {
         if (out[i] == ELF_IDX_NULL) {
-            pr_debug("Missing dynamic entry %" PRIi64 " (%s)\n",
+            pr_debug("Dynamic entry %" PRIi64 " (%s) not found\n",
                      tags[i], dynamic_tag_to_string(tags[i]));
             ok = false;
         }

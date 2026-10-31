@@ -36,14 +36,96 @@ static_assert(sizeof(Elf64_Vernaux) == sizeof(Elf32_Vernaux),
 /* ceil(VERNDX_BITS / 64), on 64-bit systems */
 #define VERNDX_BITMAP_WORDS ((VERNDX_BITS + WORD_BITS - 1) / WORD_BITS)
 
+/**
+ * @typedef Bitmap for seen version information entry identifiers.
+ *
+ * DT_VERSYM contains an array of 16-bit words which refer
+ * to either some version definition or some version dependency.
+ *
+ * Verdef/Verneed are essentially built like this:
+ *  DT_VERDEF:
+ *      Verdef[0]
+ *          (vd_ndx: 2)
+ *          [...]
+ *      Verdef[1]
+ *          (vd_ndx: 3)
+ *          [...]
+ *  DT_VERNEED:
+ *      Verneed[0]
+ *          [...]
+ *          vn_aux:
+ *              Vernaux[0]:
+ *                  (vna_other: 7)
+ *                  [...]
+ *              Vernaux[1]:
+ *                  (vna_other: 8)
+ *                  [...]
+ *      Verneed[1]
+ *          [...]
+ *          vn_aux:
+ *              Vernaux[0]:
+ *                  (vna_other: 9)
+ *                  [...]
+ *
+ *  And then DT_VERSYM, which "assigns" version information
+ *  to every dynamic symbol in .dynsym:
+ *
+ *  (For symbol [1]): `2` - Refers to Verdef[0] (vd_ndx == `2`)
+ *  (For symbol [2]): `3` - Refers to Verdef[1] (vd_ndx == `3`)
+ *  (For symbol [3]): `7` - Refers to Verneed[0].aux[0] (vna_other == `7`)
+ *  (For symbol [4]): `8` - Refers to Verneed[0].aux[1] (vna_other == `8`)
+ *  (For symbol [5]): `9` - Refers to Verneed[1].aux[0] (vna_other == `9`)
+ *  (For symbol [6]): `1` - `VER_NDX_GLOBAL` - global symbol w/o version info
+ *  (For symbol [7]): `0` - `VER_NDX_LOCAL` - local, non-exported symbol
+ *
+ * For this model to make sense, every distinct effective nonreserved
+ * version index in VERSYM must resolve to exactly one
+ * version definition (`vd_ndx`) or version dependency (`vna_other`).
+ *
+ * This bitmap is used to track which values of `vd_ndx` or `vna_other`
+ * have or have not appeared, to weed out duplicates and to ensure that
+ * every DT_VERSYM entry refers to exactly one valid dependency or definition.
+ *
+ * Vndxs are 16-bit values with the upper bit reserved as a "hidden" flag,
+ * so there are 2^15 = 32768 possible effective indices.
+ *
+ * While values 0 and 1 are reserved too, retaining their two bitmap slots
+ * as unused simplifies indexing.
+ *
+ * Because 32768 bits (which fits in 512 64-bit words) is not too much,
+ * we can just create a bitmap on the stack for all possible
+ * states and not worry about making some dynamically growing set.
+ */
 typedef size_t verndx_bitmap_t[VERNDX_BITMAP_WORDS];
 
+/** @struct Common state/information used in version information parsing. */
 struct ver_parsing_ctx {
-    const ElfFileData *data;
+    /* Immutable data, used for reading/parsing */
+
+    const ElfFileData *data; /**< ELF file data. */
+
+    /** The parsed dynamic string table (.dynstr) */
     const struct elf_dyn_strtab *strtab;
+
+    /* Mutable data; parsing context */
+
+    /**
+     * Bitmap of seen version information entry identifiers.
+     * See the typedef for `verndx_bitmap_t` for more info.
+     */
     verndx_bitmap_t seen_vndx_bitmap;
 };
 
+/**
+ * Helper for getting pointers to strings from the dynamic string table.
+ *
+ * @param ctx Version information parsing context. Must not be NULL.
+ *
+ * @param off Offset into the dynamic string table.
+ *
+ * @return Pointer to a string (into `ctx->strtab`) or
+ *  `NULL` if `off` is out of dynstr's bounds.
+ */
 static inline const uint8_t *
 strtab_strptr(const struct ver_parsing_ctx *ctx, Elf64_Off off)
 {
@@ -55,7 +137,18 @@ strtab_strptr(const struct ver_parsing_ctx *ctx, Elf64_Off off)
     return ctx->data->buf + ctx->strtab->off + off;
 }
 
-static bool claim_version_index(verndx_bitmap_t seen_bits, Elf64_Half vndx_val)
+/**
+ * Helper for setting a bit in the `seen_bits` bitmap.
+ *
+ * @param[in,out] seen_bits The bitmap in which to test/set a bit.
+ *
+ * @param[in] vndx_val The index of the bit to test/set.
+ *
+ * @return The previous value of the bit at index `vndx_val`,
+ *  so `true` if it was previously set and `false` if not.
+ */
+static inline bool
+claim_version_index(verndx_bitmap_t seen_bits, Elf64_Half vndx_val)
 {
     /* The highest bit is a "hidden" flag */
     const Elf64_Half real_vndx = vndx_val & UINT16_C(0x7fff);
@@ -71,6 +164,92 @@ static bool claim_version_index(verndx_bitmap_t seen_bits, Elf64_Half vndx_val)
     return false;
 }
 
+/**
+ * Finds the version information-related dynamic entries.
+ * Part of `parse_ver`.
+ *
+ * Ensures that:
+ *  - `DT_VERDEF`/`DT_VERDEFNUM` as well as `DT_VERNEED`/`DT_VERNEEDNUM`
+ *  appear together - either both from the pair are present, or none of them is.
+ *  - If either `DT_VERDEF`/`DT_VERDEFNUM` or `DT_VERNEED`/`DT_VERNEEDNUM`
+ *  exist, `DT_VERSYM` must be present too.
+ *
+ * The only case where `DT_VERSYM` is not present is where none
+ * of the other entries are present either, i.e. there's no version information
+ * at all.
+ *
+ * So, after this function successfully returns,
+ * the following invariants can be considered true:
+ *  `DT_VERSYM == ELF_IDX_NULL` means that there is no version information
+ *                              at all;
+ *  `DT_VERDEF != ELF_IDX_NULL` means the version _definitions_ are present;
+ *  `DT_VERNEED != ELF_IDX_NULL` means the version _dependencies_ are present.
+ *
+ * @param[in] entries The parsed dynamic entries array to search.
+ *  Must not be NULL.
+ *
+ * @param[out] out_dt_versym Output pointer for the index (into `entries`)
+ *  of the `DT_VERSYM` entry, or `ELF_IDX_NULL` if absent.
+ *  Must not be NULL.
+ *
+ * @param[out] out_dt_verdef Output pointer for the index (into `entries`)
+ *  of the `DT_VERDEF` entry, or `ELF_IDX_NULL` if absent.
+ *  Must not be NULL.
+ *
+ * @param[out] out_dt_verdefnum Output pointer for the index (into `entries`)
+ *  of the `DT_VERDEFNUM` entry, or `ELF_IDX_NULL` if absent.
+ *  Must not be NULL.
+ *
+ * @param[out] out_dt_verneed Output pointer for the index (into `entries`)
+ *  of the `DT_VERNEED` entry, or `ELF_IDX_NULL` if absent.
+ *  Must not be NULL.
+ *
+ * @param[out] out_dt_verneednum Output pointer for the index (into `entries`)
+ *  of the `DT_VERNEEDNUM` entry, or `ELF_IDX_NULL` if absent.
+ *  Must not be NULL.
+ *
+ * @return 0 on success (does not necessarily mean that version info exists),
+ *  non-zero if one or more of the aforementioned invariants is violated.
+ */
+static int find_ver_info_dyn_entries(
+        const struct elf_dyn_entries *entries,
+        elf_idx_t *out_dt_versym,
+        elf_idx_t *out_dt_verdef, elf_idx_t *out_dt_verdefnum,
+        elf_idx_t *out_dt_verneed, elf_idx_t *out_dt_verneednum
+);
+
+/**
+ * Top-level version definition information parsing function.
+ * Part of `parse_ver`.
+ *
+ * Uses the `DT_VERDEF` and `DT_VERDEFNUM` entries as well as the `PT_LOAD`
+ * program headers to locate the version definitions list and then
+ * parses and validates it.
+ * Also parses the `SHT_GNU_verdef` section (if it's present) and cross-checks
+ * it against the information from the phdrs and dyn entries.
+ *
+ * @param[in] phdrs Parsed array of program headers. Must not be NULL.
+ *
+ * @param[in] shdrs Parsed array of section headers. Must not be NULL.
+ *
+ * @param[in] entries Parsed array of dynamic entries. Must not be NULL.
+ *
+ * @param[in] dt_verdef_idx Index of the `DT_VERDEF` dynamic entry.
+ *  Must be a valid index into `entries`.
+ *
+ * @param[in] dt_verdefnum_idx Index of the `DT_VERDEFNUM` dynamic entry.
+ *  Must be a valid index into `entries`.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries and
+ *  `seen_vndx_bitmap` is used to eliminate version index duplicates.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *  Initialized to `empty_verdef_st`. Populated only on success.
+ *  In case of failure, all allocated resources are freed.
+ *
+ * @return 0 on success, non-zero on failure (malformed/invalid data).
+ */
 static int parse_verdef(const struct elf_phdrs *phdrs,
                         const struct elf_shdrs *shdrs,
                         const struct elf_dyn_entries *entries,
@@ -78,6 +257,38 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
                         struct ver_parsing_ctx *ctx,
                         struct elf_dyn_sym_ver_def *out);
 
+/**
+ * Parses the version definition entry list.
+ * Part of `parse_verdef`.
+ *
+ * @param[in] phdrs Parsed array of program headers. Must not be NULL.
+ *
+ * @param[in] ptload_idx Valid index (into `phdrs`) of the `PT_LOAD` segment
+ *  that contains the version definition list bytes.
+ *
+ * @param[in] start_off The base offset of the verdef list, computed from
+ *  `DT_VERDEF` and `p_offset` of the `PT_LOAD` referred to by `ptload_idx`.
+ *
+ * @param[in] num Total number of verdef entries to parse
+ *  (the value of `DT_VERDEFNUM`). Must be greater than 0.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries and
+ *  `seen_vndx_bitmap` is used to eliminate version index duplicates.
+ *
+ * @param[out] out Output pointer for the new array of parsed verdef entries.
+ *  Must not be NULL. Written to only on success.
+ *
+ * @param[out] out_max_end Output pointer for the absolute file offset
+ *  immediately past the highest-addressed parsed Verdef/Verdaux entry,
+ *  marking the upper bound of the entire Verdef table. Must not be NULL.
+ *
+ * @param[out] out_base_idx Output pointer for the index (into `*out`)
+ *  of the BASE verdef entry. (On success) this value is always
+ *  a valid index; never `ELF_IDX_NULL`.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 static int read_verdef_entries(
         const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
         Elf64_Off start_off, size_t num, struct ver_parsing_ctx *ctx,
@@ -86,18 +297,259 @@ static int read_verdef_entries(
         elf_idx_t *out_base_idx
 );
 
+/**
+ * Parses a single version definition entry and its auxiliary list.
+ * Part of `read_verdef_entries`.
+ *
+ * @param[in] seg_end Upper bound of the `PT_LOAD` segment
+ *  that contains the verdef table.
+ *
+ * @param[in] is_last_entry Whether the entry is the last one in the list.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entry and
+ *  `seen_vndx_bitmap` is used to eliminate version index duplicates.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verdef/Verdaux entry. Must not be NULL.
+ *
+ * @param[in,out] off_p Pointer to a variable containing current entry's offset.
+ *  On success, the value is modified to point to the next Verdef entry,
+ *  i.e. the current one's `vd_next` is added to it. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the parsed Verdef entry
+ *  along with its Verdaux list. Must not be NULL.
+ *  Populated only on success; on failure all allocated resources are freed.
+ *
+ * @param[out] out_is_base Output pointer for whether the parsed Verdef entry
+ *  is the base entry, i.e. has the `VER_FLG_BASE` flag set.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_validate_verdef_entry(
+        Elf64_Off seg_end, bool is_last_entry, struct ver_parsing_ctx *ctx,
+        Elf64_Off *max_end_p, Elf64_Off *off_p,
+
+        struct elf_dyn_sym_ver_def_ent *out, bool *out_is_base
+);
+
+/**
+ * Parses a Verdef entry's Verdaux list.
+ * Part of `read_validate_verdef_entry`.
+ *
+ * @param[in] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries.
+ *
+ * @param[in] vd_hash The value of the parent Verdef's `vd_hash` field.
+ *  Used to check that the first Verdaux's `vda_name` hash matches
+ *  that value.
+ *
+ * @param[in] seg_end Upper bound of the `PT_LOAD` segment
+ *  that contains the verdef table. Must be >= `VERDAUX_ENTSIZE`
+ *  and >= `VERDEF_ENTSIZE`.
+ *
+ * @param[in] start_off Absolute file offset of the start of the Verdaux list.
+ *  This value should be computed from the parent Verdef's own absolute offset
+ *  and its `vd_aux` value.
+ *
+ * @param[in] cnt The number of Verdaux entries in the list.
+ *  Must be greater than 0, as per the spec requirements.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verdef/Verdaux entry. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the new list of `cnt` Verdaux entries.
+ *  Must not be NULL. Only written to on success; on failure, all allocated
+ *  resources are freed.
+ *
+ * @param[out] out_list_end Output pointer for the end offset of the last
+ *  Verdaux entry in the list, i.e. the upper bound of the list.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 static int read_verdaux_list(
         const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
         Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
 );
 
-static int validate_sht_gnu_verXXX_if_exists(
-        const struct elf_shdrs *shdrs, elf_idx_t dynstr_idx,
-        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword min_size, Elf64_Xword num,
-        elf_idx_t *out, bool is_verdef
+/**
+ * Parses and validates a single version definition auxiliary information entry.
+ * Part of `read_verdaux_list`.
+ *
+ * @param[in] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries.
+ *
+ * @param[in] vd_hash The value of the parent Verdef's `vd_hash` field.
+ *  Used to check that the first Verdaux's `vda_name` hash matches
+ *  that value, which means that it's only used when `is_first_entry == true`.
+ *
+ * @param[in] seg_end Upper bound of the `PT_LOAD` segment
+ *  that contains the verdef table. Must be >= `VERDAUX_ENTSIZE`.
+ *
+ * @param[in] is_first_entry Whether the entry is the first one in the list.
+ *
+ * @param[in] is_last_entry Whether the entry is the last one in the list.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verdef/Verdaux entry. Must not be NULL.
+ *
+ * @param[in,out] off_p Pointer to a variable containing current entry's offset.
+ *  On success, the value is modified to point to the next Verdaux entry,
+ *  i.e. the current one's `vda_next` is added to it. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the parsed Verdaux structure.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_validate_verdaux_entry(
+        const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
+        Elf64_Off seg_end, bool is_first_entry, bool is_last_entry,
+        Elf64_Off *max_end_p, Elf64_Off *off_p, Elf64_Verdaux *out
 );
 
+/**
+ * @struct Container for a Verdef's name.
+ * Used for validating Verdef relations' structure in `validate_verdef_names`.
+ */
+struct verdef_name_ref {
+    /**
+     * The SysV-style hash of `name`; the value of `vd_hash`.
+     * Since it's already there, we might as well use it to our advantage
+     * to speed up string lookups/comparisons.
+     */
+    Elf64_Word vd_hash;
+
+    /**
+     * The name of the Verdef.
+     * This field holds the string pointer referred to by the Verdef's
+     * first auxiliary entry's `vda_name`.
+     */
+    const char *name;
+
+    /**
+     * Index (into the parsed array) of the Verdef
+     * whose name this struct refers to.
+     */
+    size_t self_idx;
+};
+
+/**
+ * Validates the Verdef table structure by ensuring that the relations
+ * created with their names are correct and consistent.
+ * Part of `parse_verdef`.
+ *
+ * Because Verdaux structs are just:
+ *  typedef struct ElfXX_Verdaux {
+ *      ElfXX_Word vda_name; // Name of this entry; offset into .dynstr
+ *      ElfXX_Word vda_next; // Offset to the next entry
+ *  } ElfXX_Verdaux;
+ * They are effectively a linked list of `vda_name`s AKA strings.
+ * Therefore, for simplicity, we'll refer to a Verdaux's `vda_name`
+ * as its "value".
+ *
+ * Recall that version definitions' auxiliary entry lists are canonically
+ * structured such that the first (0th) entry, let's call it the "Primary",
+ * labels the parent Verdef itself by its `vda_name`. Its role is similar
+ * to that of a Primary Key in a database in that:
+ *  - Every Primary Verdaux's value must be unique;
+ *  - Every Verdef ("record") must have exactly one Primary Verdaux.
+ *
+ * The later Verdauxs (idxs 1..n), let's call them "Additional".
+ * fulfill a role similar to that of database Foreign Keys:
+ *  - For every Additional Verdaux's value, there exists some different
+ *      Verdef (record) with a matching Primary Verdaux;
+ *  - Any number of them may exist, including none at all.
+ *
+ * These above points are exactly what the function validates.
+ *
+ * And yes, because the first (Primary) Verdaux entry is always required
+ * to be present, they could've just made it a part of the Verdef struct itself
+ * (like a `vd_name` field), but oh well, this is the ELF spec.
+ *
+ * The actual relation between the Verdefs/Verdauxs is that the Additional
+ * (Foreign Key) Verdauxes refer to other Verdefs which the current one
+ * depends on/inherits from, e.g.:
+ *  Verdef[0]: (VER_0);    Verdef[1]: (VER_1);    Verdef[2]: (VER_2);
+ *   PK: "VER_0"            PK: "VER_1",           PK: "VER_2",
+ *                          FK: "VER_0"            FK: "VER_1"
+ * The above structure creates a dependency graph like this:
+ *  VER_0 <- VER_1 <- VER_2
+ * where VER_0 is standalone (requires: VER_0 - only itself),
+ * VER_1 depends on VER_0 (requires: VER_1, VER_0)
+ * and VER_2 depends on VER_1 which depends on VER_0
+ *  (requires: VER_2, VER_1, VER_0)
+ *
+ * Verdefs express the above relationship in a smart,
+ * yet unnecessarily annoying way.
+ *
+ * Another thing in Verdefs that would need to be validated is that every verndx
+ * referenced by the them (with their `vd_ndx` fields) is globally unique,
+ * but that's already done during initial parsing with the `seen_vndx_bitmap`.
+ *
+ * @param[in] arr The array of `num` verdef entries to validate.
+ *  Must not be NULL.
+ *
+ * @param[in] num The number of entries (in `arr`) to be validated.
+ *
+ * @param[in] ctx The version information parsing context. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int validate_verdef_relations(
+        const struct elf_dyn_sym_ver_def_ent *arr, size_t num,
+        const struct ver_parsing_ctx *ctx
+);
+
+/**
+ * Used to `qsort` and `bsearch` Verdaux names in `validate_verdef_relations`.
+ * Part of `validate_verdef_relations`.
+ *
+ * Sorts the entries by their (`vd_hash`, `aux[0].vda_name`), i.e.
+ * first compares the `vd_hash`es and if they are equal, `strcmp`s the names.
+ *
+ * @param[in] a_ Pointer to the lhs `verdef_name_ref` struct. Must not be NULL.
+ *
+ * @param[in] b_ Pointer to the rhs `verdef_name_ref` struct. Must not be NULL.
+ *
+ * @return `-1` if `a < b`, `0` if `a == b`, `1` if `a > b`.
+ */
+static int verdef_name_ref_cmp(const void *a_, const void *b_);
+
+/**
+ * Top-level version dependency information parsing function.
+ * Part of `parse_ver`.
+ *
+ * Uses the `DT_VERNEED` and `DT_VERNEEDNUM` entries as well as the `PT_LOAD`
+ * program headers to locate the version dependency list and then
+ * parses and validates it.
+ * Also, if present, parses the `SHT_GNU_verneed` section header
+ * and cross-checks it against the information from the phdrs and dyn entries.
+ *
+ * @param[in] phdrs Parsed array of program headers. Must not be NULL.
+ *
+ * @param[in] shdrs Parsed array of section headers. Must not be NULL.
+ *
+ * @param[in] entries Parsed array of dynamic entries. Must not be NULL.
+ *
+ * @param[in] dt_verneed_idx Index of the `DT_VERNEED` dynamic entry.
+ *  Must be a valid index into `entries`.
+ *
+ * @param[in] dt_verneednum_idx Index of the `DT_VERNEEDNUM` dynamic entry.
+ *  Must be a valid index into `entries`.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries and
+ *  `seen_vndx_bitmap` is used to eliminate version index duplicates.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *  Initialized to `empty_verneed_st`. Populated only on success.
+ *  In case of failure, all allocated resources are freed.
+ *
+ * @return 0 on success, non-zero on failure (malformed/invalid data).
+ */
 static int parse_verneed(
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries,
@@ -107,7 +559,341 @@ static int parse_verneed(
         struct elf_dyn_sym_ver_need *out
 );
 
-static const struct elf_dyn_sym_ver_def empty_verdef_ctx = {
+/**
+ * Parses the version dependency entry list.
+ * Part of `parse_verneed`.
+ *
+ * @param[in] phdrs Parsed array of program headers. Must not be NULL.
+ *
+ * @param[in] ptload_idx Valid index (into `phdrs`) of the `PT_LOAD` segment
+ *  that contains the version dependency list bytes.
+ *
+ * @param[in] tbl_off The base offset of the verneed list, computed from
+ *  `DT_VERNEED` and `p_offset` of the `PT_LOAD` referred to by `ptload_idx`.
+ *
+ * @param[in] num Total number of verneed entries to parse
+ *  (the value of `DT_VERNEEDNUM`). Must be greater than 0.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *  `data` and `strtab` are read to parse the entries and
+ *  `seen_vndx_bitmap` is used to eliminate version index duplicates.
+ *
+ * @param[out] out Output pointer for the new array of parsed verneed entries.
+ *  Must not be NULL. Written to only on success.
+ *
+ * @param[out] out_max_end Output pointer for the absolute file offset
+ *  immediately past the highest-addressed parsed Verneed/Vernaux entry,
+ *  marking the upper bound of the entire Verneed table. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_verneed_entries(
+        struct ver_parsing_ctx *ctx,
+        const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
+        const struct elf_dyn_entries *entries,
+        Elf64_Off tbl_off, size_t num,
+
+        struct elf_dyn_sym_ver_need_ent **out, Elf64_Off *out_max_end
+);
+
+/**
+ * @struct Container for the value of a DT_NEEDED entry.
+ *
+ * Used by `read_verneed_entries` to check that every Verneed's `vn_file`
+ * refers to a valid and existing DT_NEEDED entry.
+ */
+struct dt_needed_name {
+    /**
+     * The `d_un.d_val` value of the `DT_NEEDED` entry;
+     * offset into the dynamic string table (.dynstr).
+     */
+    Elf64_Xword entry_val;
+
+    /**
+     * GNU-style hash of the string pointed to by `entry_val`,
+     * used to speed up comparisons in `name_is_dt_needed`.
+     */
+    Elf32_Word hash;
+};
+
+/**
+ * Initializes a sorted list of DT_NEEDED entries.
+ *
+ * Used by `read_verneed_entries` to create the array that
+ * `read_validate_verneed_entry` then uses to check that each
+ * Verneed's `vn_file` refers to a valid and existing DT_NEEDED entry.
+ *
+ * @param[in] entries The dynamic entries array. Must not be NULL.
+ *
+ * @param[in] strtab The dynamic string table (.dynstr)
+ *  associated with `entries`. Must not be NULL.
+ *
+ * @param[in] data The ELF file data. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the new (malloc'd) sorted array
+ *  of `*out_num` DT_NEEDED entry references (see the struct definition).
+ *  Must not be NULL.
+ *
+ * @param[out] out_num Output pointer for the number of found
+ *  DT_NEEDED entries, i.e. the size of `*out`. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int init_dt_needed_name_table(
+        const struct elf_dyn_entries *entries,
+        const struct elf_dyn_strtab *strtab, const ElfFileData *data,
+        struct dt_needed_name **out, size_t *out_num
+);
+
+/**
+ * Checks whether a Verneed's `vn_file` refers to a valid DT_NEEDED entry,
+ * by `bsearch`ing a sorted array of references created with
+ * `init_dt_needed_name_table`. Used by `read_validate_verneed_entry`.
+ *
+ * @param[in] dt_needed_tbl The sorted array of `n_dt_needed` references
+ *  to DT_NEEDED entries. Must not be NULL (if `n_dt_needed > 0`).
+ *
+ * @param[in] n_dt_needed The size of `dt_needed_tbl`.
+ *
+ * @param[in] ctx The version information parsing context. Must not be NULL.
+ *
+ * @param[in] vn_file The Verneed `vn_file` value to validate.
+ *
+ * @return `true` if `vn_file` refers to a DT_NEEDED entry
+ *  present in `dt_needed_tbl`, `false` if not.
+ */
+static bool name_is_dt_needed(
+        const struct dt_needed_name *dt_needed_tbl, size_t n_dt_needed,
+        const struct ver_parsing_ctx *ctx, Elf64_Word vn_file
+);
+
+/**
+ * Comparison function for the `bsearch` in `name_is_dt_needed`.
+ *
+ * Compares two DT_NEEDED entry references by their `d_un.d_val` values,
+ * essentially checking for "pointer equality".
+ *
+ * @param[in] a_ Pointer to lhs `struct dt_needed_name`. Must not be NULL.
+ *
+ * @param[in] b_ Pointer to rhs `struct dt_needed_name`. Must not be NULL.
+ *
+ * @return `-1` if `a < b`, `0` if `a == b`, `1` if `a > b`.
+ */
+static int dt_needed_name_cmp(const void *a_, const void *b_);
+
+/**
+ * Parses and validates the structural consistency of a single Verneed entry.
+ * Part of `read_verneed_entries`.
+ *
+ * @param[in] dt_needed_tbl The sorted array of DT_NEEDED entry references,
+ *  created with `init_dt_needed_name_table`, used to validate that
+ *  the Verneed's `vn_file` refers to an existing DT_NEEDED entry.
+ *  Must not be NULL (if `n_dt_needed > 0`).
+ *
+ * @param[in] n_dt_needed The size of `dt_needed_tbl`.
+ *
+ * @param[in] seg_end High bound of the PT_LOAD segment
+ *  containing the Verneed table. Must be >= `VERNAUX_ENTSIZE`
+ *  and >= `VERNEED_ENTSIZE`.
+ *
+ * @param[in] is_last_entry Whether the current Verneed entry
+ *  is supposed to be the last one.
+ *
+ * @param[in,out] ctx Version information parsing context. Must not be NULL.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verneed/Vernaux entry. Must not be NULL.
+ *
+ * @param[in,out] off_p Pointer to a variable containing current entry's offset.
+ *  On success, the value is modified to point to the next Verneed entry,
+ *  i.e. the current one's `vn_next` is added to it. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the parsed Verneed entry
+ *  and its auxiliary information list. Must not be NULL.
+ *  Only populated on success.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_validate_verneed_entry(
+        const struct dt_needed_name *dt_needed_tbl, size_t n_dt_needed,
+        Elf64_Off seg_end, bool is_last_entry, struct ver_parsing_ctx *ctx,
+        Elf64_Off *max_end_p, Elf64_Off *off_p,
+
+        struct elf_dyn_sym_ver_need_ent *out
+);
+
+/**
+ * Parses and validates a single Verneed's auxiliary information entry list.
+ * Part of `read_validate_verneed_entry`.
+ *
+ * @param[in,out] ctx The version information parsing context. Must not be NULL.
+ *
+ * @param[in] seg_end High bound of the PT_LOAD segment
+ *  containing the Verneed table. Must be >= `VERNAUX_ENTSIZE`.
+ *
+ * @param[in] start_off Absolute offset of the start of the Vernaux list.
+ *
+ * @param[in] cnt Expected number of Vernaux entries; the value of `vn_cnt`
+ *  and the size of `*out`. Must be greater than 0.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verneed/Vernaux entry. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the newly allocated array of `cnt`
+ *  Vernaux entries. Must not be NULL.
+ *
+ * @param[out] out_list_end Output pointer for the end offset of the last
+ *  Vernaux entry in the list, i.e. the upper bound of the list.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_vernaux_list(
+        struct ver_parsing_ctx *ctx, Elf64_Off seg_end,
+        Elf64_Off start_off, Elf64_Half cnt, Elf64_Off *max_end_p,
+        Elf64_Vernaux **out, Elf64_Off *out_list_end
+);
+
+/**
+ * Parses and validates a single version dependency auxiliary information entry.
+ * Part of `read_vernaux_list`.
+ *
+ * @param[in] seg_end High bound of the PT_LOAD segment
+ *  containing the Verneed table. Must be >= `VERNAUX_ENTSIZE`.
+ *
+ * @param[in] is_last_entry Whether the current Vernaux entry
+ *  is supposed to be the last one.
+ *
+ * @param[in,out] ctx The version information parsing context. Must not be NULL.
+ *
+ * @param[in,out] max_end_p Pointer to the value containing the
+ *  highest seen end offset of a Verneed/Vernaux entry. Must not be NULL.
+ *
+ * @param[in,out] off_p Pointer to the offset of the Vernaux entry to read.
+ *  On success, set to point to the next entry. Must not be NULL.
+ *
+ * @param[out] out Output pointer for the parsed Vernaux. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_validate_vernaux_entry(
+        Elf64_Off seg_end, bool is_last_entry, struct ver_parsing_ctx *ctx,
+        Elf64_Off *max_end_p, Elf64_Off *off_p, Elf64_Vernaux *out
+);
+
+/**
+ * @struct Container for a version dependency name.
+ *
+ * Used to `qsort` an array of version dependency names
+ * so that it can be easily checked for duplicates.
+ *
+ * Note that both the parent Verneed `vn_file` and the Vernaux `vna_name`
+ * are used as the key, because this is what's incorrect:
+ *  ("lib1.so", "VER_1"), ("lib1.so", "VER_1")
+ * while this is normal and allowed:
+ *  ("lib1.so", "VER"), ("lib2.so", "VER")
+ */
+struct verneed_name_ref {
+    /**
+     * The string referenced by the parent Verneed's `vn_file`;
+     * pointer into the dynamic string table (.dynstr) data.
+     */
+    const char *vn_file;
+
+    /**
+     * The string referenced by the Vernaux's `vna_name`;
+     * pointer into the dynamic string table (.dynstr) data.
+     */
+    const char *vna_name;
+
+    /**
+     * SysV-style hash of `vna_name`; the value of the Vernaux's `vna_hash`.
+     * Used to speed up comparisons of (`vn_file`, `vna_name`) pairs.
+     */
+    Elf64_Word vna_hash;
+};
+
+/**
+ * Validates that there are no duplicate version dependencies.
+ * See the definition of `struct verneed_name_ref`.
+ * Part of `parse_verneed`.
+ *
+ * @param[in] arr The parsed array of `num` Verneed entries
+ *  (along with their Vernaux lists) to be validated. Must not be NULL.
+ *
+ * @param[in] num The size of `arr`.
+ *
+ * @param[in] ctx The version parsing context. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int validate_verneed_names_uniqueness(
+        const struct elf_dyn_sym_ver_need_ent *arr, size_t num,
+        const struct ver_parsing_ctx *ctx
+);
+
+/**
+ * Comparison function for the `qsort` that sorts an array of
+ * version dependency names so that it can be easily checked for duplicates.
+ *
+ * Compares two version dependencies as whole (`vn_file`, `vna_name`) pairs
+ * (see the definition of `struct verneed_name_ref`).
+ * Uses the `vna_hash` to more quickly reject definitely differing pairs.
+ *
+ * @param[in] a_ Pointer to the lhs `struct verneed_name_ref`. Must not be NULL.
+ *
+ * @param[in] b_ Pointer to the rhs `struct verneed_name_ref`. Must not be NULL.
+ *
+ * @return `-1` if `a < b`, `0` if `a == b`, `1` if `a > b`.
+ */
+static int verneed_name_ref_cmp(const void *a_, const void *b_);
+
+/**
+ * Generic validation function for `SHT_GNU_verdef` and `SHT_GNU_verneed`
+ * section headers. Used in `parse_verdef` and `parse_verneed`.
+ *
+ * Searches for the respective section header and if found, cross-checks it
+ * against the data found from the phdrs, dynamic entries and the
+ * verdef/verneed table itself.
+ *
+ * @param[in] shdrs The parsed section headers array. Must not be NULL.
+ *
+ * @param[in] dynstr_idx Index (into `shdrs`) of the dynamic string table
+ *  (".dynstr") section, or `ELF_IDX_NULL` if not present.
+ *
+ * @param[in] vaddr Expected virtual address of the section; the value of
+ *  the respective `DT_VERDEF`/`DT_VERNEED` dynamic entry.
+ *
+ * @param[in] off Expected file offset of the section.
+ *
+ * @param[in] min_size Minimal size of the section, inferred from
+ *  the highest seen end offset of a Verdef/Verdaux or Verneed/Vernaux entry.
+ *
+ * @param[in] num The number of Verdef/Verneed entries;
+ *  the value of the respective `DT_VERDEFNUM`/`DT_VERNEEDNUM` dynamic entry.
+ *
+ * @param[out] out Output pointer for the index (into `shdrs`) of the found
+ *  section header, or for `ELF_IDX_NULL` if invalid or not present.
+ *  Must not be NULL.
+ *
+ * @param[in] is_verdef Set to `true` for `SHT_GNU_verdef`
+ *  and `false` for `SHT_GNU_verneed`.
+ *
+ * @return 0 on success (nothing is found OR a valid section header is found),
+ *  non-zero on failure (an invalid section header is found).
+ */
+static int validate_sht_gnu_verXXX_if_exists(
+        const struct elf_shdrs *shdrs, elf_idx_t dynstr_idx,
+        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword min_size, Elf64_Xword num,
+        elf_idx_t *out, bool is_verdef
+);
+
+/**
+ * The verdef `elf_dyn_sym_ver_def` struct
+ * initialized to semantically empty values.
+ */
+static const struct elf_dyn_sym_ver_def empty_verdef_st = {
+    .present = false,
     .num = 0, .arr = NULL,
     .base_idx = ELF_IDX_NULL,
     .vaddr = 0, .off = 0,
@@ -115,16 +901,26 @@ static const struct elf_dyn_sym_ver_def empty_verdef_ctx = {
     .shdr = ELF_IDX_NULL
 };
 
-static const struct elf_dyn_sym_ver_need empty_verneed_ctx = {
+/**
+ * The verneed `elf_dyn_sym_ver_need` struct
+ * initialized to semantically empty values.
+ */
+static const struct elf_dyn_sym_ver_need empty_verneed_st = {
+    .present = false,
     .num = 0, .arr = NULL,
     .vaddr = 0, .off = 0,
     .dt_verneed_idx = ELF_IDX_NULL, .dt_verneednum_idx = ELF_IDX_NULL,
     .shdr = ELF_IDX_NULL
 };
 
-static const struct elf_dyn_sym_ver empty_ver_ctx = {
-    .def = empty_verdef_ctx,
-    .need = empty_verneed_ctx
+/**
+ * The top-level `elf_dyn_sym_ver` struct
+ * initialized to semantically empty values.
+ */
+static const struct elf_dyn_sym_ver empty_ver_st = {
+    .present = false,
+    .def = empty_verdef_st,
+    .need = empty_verneed_st
 };
 
 int parse_ver(const struct elf_phdrs *phdrs,
@@ -134,79 +930,56 @@ int parse_ver(const struct elf_phdrs *phdrs,
               const ElfFileData *data,
               struct elf_dyn_sym_ver *out)
 {
-    int r = 0;
-    elf_idx_t dt_versym_idx = ELF_IDX_NULL;
-    enum { DT_VERDEF_IDX = 0, DT_VERDEFNUM_IDX = 1 };
-    elf_idx_t verdef_idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
-    enum { DT_VERNEED_IDX = 0, DT_VERNEEDNUM_IDX = 1 };
-    elf_idx_t verneed_idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
+    if (out != NULL)
+        *out = empty_ver_st;
 
-    bool __attribute__((unused)) versym_present = false,
-         verdef_present = false,
-         verneed_present = false;
+    /* Find the DT_VERSYM, DT_VERDEF(NUM) and DT_VERNEED(NUM) entries */
+    elf_idx_t dt_versym_idx = ELF_IDX_NULL,
+              dt_verdef_idx = ELF_IDX_NULL, dt_verdefnum_idx = ELF_IDX_NULL,
+              dt_verneed_idx = ELF_IDX_NULL, dt_verneednum_idx = ELF_IDX_NULL;
+    if (find_ver_info_dyn_entries(entries, &dt_versym_idx,
+                &dt_verdef_idx, &dt_verdefnum_idx,
+                &dt_verneed_idx, &dt_verneednum_idx))
+    {
+        pr_error("Invalid version information location in dynamic entries\n");
+        return -1;
+    } else if (dt_versym_idx == ELF_IDX_NULL &&
+               dt_verdef_idx == ELF_IDX_NULL && dt_verneed_idx == ELF_IDX_NULL)
+    {
+        pr_debug("No dynamic symbol version information\n");
+        return 1;
+    }
+    /* From this point, use `goto err` instead of `return`ing directly */
 
-    struct elf_dyn_sym_ver ver = empty_ver_ctx;
-
+    struct elf_dyn_sym_ver ver = empty_ver_st;
     struct ver_parsing_ctx ver_parsing_ctx = {
         .data = data,
         .strtab = strtab,
         .seen_vndx_bitmap = { 0 }
     };
 
-    if (out != NULL)
-        *out = empty_ver_ctx;
-
-    r = find_unique_dyn_entry(entries, DT_VERSYM, &dt_versym_idx);
-    if (r < 0) {
-        pr_error("Duplicate DT_VERSYM entry\n");
+    /* Parse the Verdef table if DT_VERDEF(NUM) exist */
+    if (dt_verdef_idx != ELF_IDX_NULL &&
+        parse_verdef(phdrs, shdrs, entries, dt_verdef_idx, dt_verdefnum_idx,
+                     &ver_parsing_ctx, &ver.def))
+    {
+        pr_error("Failed to parse symbol version definition information\n");
         goto err;
     }
-    versym_present = r == 0;
-
-    r = find_unique_dyn_entries(entries, 2,
-            (Elf64_Sxword[]) { DT_VERDEF, DT_VERDEFNUM }, verdef_idxs);
-    if (r < 0) {
-        pr_error("Duplicate and/or missing DT_VERDEF and/or DT_VERDEFNUM "
-                 "entries");
-        goto err;
-    }
-    verdef_present = r == 0;
-
-    r = find_unique_dyn_entries(entries, 2,
-            (Elf64_Sxword[]) { DT_VERNEED, DT_VERNEEDNUM }, verneed_idxs);
-    if (r < 0) {
-        pr_error("Duplicate and/or missing DT_VERNEED and/or DT_VERNEEDNUM "
-                 "entries");
-        goto err;
-    }
-    verneed_present = r == 0;
-
-    if ((verdef_present || verneed_present) && !versym_present) {
-        pr_error("DT_VERDEF and/or DT_VERNEED present without DT_VERSYM\n");
+    /* Parse the Verneed table if DT_VERNEED(NUM) exist */
+    if (dt_verneed_idx != ELF_IDX_NULL &&
+        parse_verneed(phdrs, shdrs, entries, dt_verneed_idx, dt_verneednum_idx,
+                      &ver_parsing_ctx, &ver.need))
+    {
+        pr_error("Failed to parse symbol version dependency information\n");
         goto err;
     }
 
-    if (verdef_present) {
-        if (parse_verdef(phdrs, shdrs, entries,
-                verdef_idxs[DT_VERDEF_IDX], verdef_idxs[DT_VERDEFNUM_IDX],
-                &ver_parsing_ctx, &ver.def))
-        {
-            pr_error("Failed to parse symbol version definition information\n");
-            goto err;
-        }
-    }
-
-    if (verneed_present) {
-        if (parse_verneed(phdrs, shdrs, entries,
-                verneed_idxs[DT_VERNEED_IDX], verneed_idxs[DT_VERNEEDNUM_IDX],
-                &ver_parsing_ctx, &ver.need))
-        {
-            pr_error("Failed to parse symbol version dependency information\n");
-            goto err;
-        }
-    }
+    ver.present = true;
 
 err:
+    ver_parsing_ctx = (struct ver_parsing_ctx) { 0 };
+
     if (ver.def.arr != NULL) {
         for (Elf64_Xword i = 0; i < ver.def.num; i++) {
             if (ver.def.arr[i].aux_list != NULL) {
@@ -227,113 +1000,75 @@ err:
         free(ver.need.arr);
         ver.need.arr = NULL;
     }
-    ver = empty_ver_ctx;
-    return 1;
+    ver = empty_ver_st;
+    return -1;
 }
 
-struct verdef_name_ref {
-    Elf64_Word vd_hash;
-    const char *name;
-    size_t self_idx;
-};
-
-static int verdef_name_ref_cmp(const void *a_, const void *b_)
-{
-    const struct verdef_name_ref *const a = a_;
-    const struct verdef_name_ref *const b = b_;
-
-    /* Sort the verdef entries by their first aux entries' `vda_name`
-     * while using the `vd_hash` to our advantage */
-
-    if (a->vd_hash < b->vd_hash) return -1;
-    if (a->vd_hash > b->vd_hash) return 1;
-
-    return strcmp(a->name, b->name);
-}
-
-static int validate_verdef_names(
-        const struct elf_dyn_sym_ver_def_ent *arr, size_t num,
-        const struct ver_parsing_ctx *ctx
+static int find_ver_info_dyn_entries(
+        const struct elf_dyn_entries *entries,
+        elf_idx_t *out_dt_versym,
+        elf_idx_t *out_dt_verdef, elf_idx_t *out_dt_verdefnum,
+        elf_idx_t *out_dt_verneed, elf_idx_t *out_dt_verneednum
 )
 {
-    int ret = 0;
-    struct verdef_name_ref *refs = NULL;
+    *out_dt_versym = ELF_IDX_NULL;
+    *out_dt_verdef = *out_dt_verdefnum = ELF_IDX_NULL;
+    *out_dt_verneed = *out_dt_verneednum = ELF_IDX_NULL;
 
-    refs = calloc(num, sizeof(*refs));
-    if (refs == NULL) {
-        pr_error("Failed to allocate verdef name ref structs array\n");
-        ret = -1;
-        goto out;
+    bool versym_present = false,
+         verdef_present = false,
+         verneed_present = false;
+
+    elf_idx_t dt_versym_idx = ELF_IDX_NULL;
+    enum { DT_VERDEF_IDX = 0, DT_VERDEFNUM_IDX = 1 };
+    elf_idx_t verdef_idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
+    enum { DT_VERNEED_IDX = 0, DT_VERNEEDNUM_IDX = 1 };
+    elf_idx_t verneed_idxs[2] = { ELF_IDX_NULL, ELF_IDX_NULL };
+
+    int r = 0;
+
+    r = find_unique_dyn_entry(entries, DT_VERSYM, &dt_versym_idx);
+    if (r < 0) {
+        pr_error("Duplicate DT_VERSYM entry\n");
+        return 1;
     }
-    for (size_t i = 0; i < num; i++) {
-        const Elf64_Word vd_hash = arr[i].vd.vd_hash;
-        const Elf64_Verdaux *const first_aux = &arr[i].aux_list[0];
+    versym_present = r == 0;
 
-        refs[i] = (struct verdef_name_ref) {
-            .vd_hash = vd_hash,
-            .name = (const char *)strtab_strptr(ctx, first_aux->vda_name),
-            .self_idx = i
-        };
+    r = find_unique_dyn_entries(entries, 2,
+            (Elf64_Sxword[]) { DT_VERDEF, DT_VERDEFNUM }, verdef_idxs);
+    if (r < 0) {
+        pr_error("Duplicate and/or missing DT_VERDEF and/or DT_VERDEFNUM "
+                 "entries");
+        return 1;
     }
+    verdef_present = r == 0;
 
-    qsort(refs, num, sizeof(*refs), verdef_name_ref_cmp);
-
-    /* Check for duplicates */
-    for (size_t i = 1; i < num; i++) {
-        const struct verdef_name_ref *const curr = &refs[i];
-        const struct verdef_name_ref *const prev = &refs[i - 1];
-
-        if (prev->vd_hash == curr->vd_hash &&
-            !strcmp(prev->name, curr->name))
-        {
-            pr_error("Duplicate verdef name \"%s\"\n", curr->name);
-            ret = 1;
-        }
+    r = find_unique_dyn_entries(entries, 2,
+            (Elf64_Sxword[]) { DT_VERNEED, DT_VERNEEDNUM }, verneed_idxs);
+    if (r < 0) {
+        pr_error("Duplicate and/or missing DT_VERNEED and/or DT_VERNEEDNUM "
+                 "entries");
+        return 1;
     }
+    verneed_present = r == 0;
 
-    /* Resolve every verdef's verdaux[1..n] vda_names
-     * against some other verdef's verdaux[0]'s vda_name.
-     *
-     * This is easy because we conveniently have exactly what we need:
-     * a (sorted!) array of verdefs with their verdaux[0] entries. */
-    for (size_t i = 0; i < num; i++) {
-        const struct verdef_name_ref *const curr_ref = &refs[i];
-
-        const struct elf_dyn_sym_ver_def_ent *const curr_vd =
-            &arr[curr_ref->self_idx];
-
-        for (Elf64_Half j = 1; j < curr_vd->vd.vd_cnt; j++) {
-
-            const Elf64_Verdaux *const curr_1_n_aux = &curr_vd->aux_list[j];
-
-            const char *const vda_name = (const char *)
-                strtab_strptr(ctx, curr_1_n_aux->vda_name);
-            assert(vda_name != NULL);
-
-            const struct verdef_name_ref key = {
-                .vd_hash = sysv_hash((const uint8_t *)vda_name),
-                .name = vda_name
-            };
-            const struct verdef_name_ref *const res =
-                bsearch(&key, refs, num, sizeof(*refs), verdef_name_ref_cmp);
-
-            if (res == NULL) {
-                pr_error("Additional verdaux entry \"%s\" doesn't resolve "
-                         "to any verdef's first verdaux entry\n", vda_name);
-                ret = 1;
-            } else if (res->self_idx == curr_ref->self_idx) {
-                pr_error("Verdef \"%s\" depends on itself\n", curr_ref->name);
-                ret = 1;
-            }
-        }
+    if ((verdef_present || verneed_present) && !versym_present) {
+        pr_error("DT_VERDEF and/or DT_VERNEED present without DT_VERSYM\n");
+        return 1;
+    } else if (!verdef_present && !verneed_present && !versym_present) {
+        return 0;
     }
 
-out:
-    if (refs != NULL) {
-        free(refs);
-        refs = NULL;
+    *out_dt_versym = dt_versym_idx;
+    if (verdef_present) {
+        *out_dt_verdef = verdef_idxs[DT_VERDEF_IDX];
+        *out_dt_verdefnum = verdef_idxs[DT_VERDEFNUM_IDX];
     }
-    return ret;
+    if (verneed_present) {
+        *out_dt_verneed = verneed_idxs[DT_VERNEED_IDX];
+        *out_dt_verneednum = verneed_idxs[DT_VERNEEDNUM_IDX];
+    }
+    return 0;
 }
 
 static int parse_verdef(const struct elf_phdrs *phdrs,
@@ -343,13 +1078,10 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
                         struct ver_parsing_ctx *ctx,
                         struct elf_dyn_sym_ver_def *out)
 {
-    *out = empty_verdef_ctx;
+    *out = empty_verdef_st;
 
     const Elf64_Addr vaddr = entries->arr[dt_verdef_idx].d_un.d_ptr;
     const Elf64_Xword num = entries->arr[dt_verdefnum_idx].d_un.d_val;
-
-    if (num == 0)
-        pr_error("WARNING: Empty DT_VERDEF list\n");
 
     Elf64_Xword min_tbl_size = 0;
     elf_idx_t ptload_idx = ELF_IDX_NULL;
@@ -359,7 +1091,12 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
     elf_idx_t vd_base_idx = ELF_IDX_NULL;
     elf_idx_t sht_gnu_verdef_idx = ELF_IDX_NULL;
 
-    if (num > UINT64_MAX / VERDEF_ENTSIZE || num > SIZE_MAX) {
+    if (num == 0) {
+        /* If version definitions are present at all, the `VER_FLG_BASE` entry
+         * must exist, therefore `num` must be greater than 0. */
+        pr_error("Empty DT_VERDEF list\n");
+        goto err;
+    } else if (num > UINT64_MAX / VERDEF_ENTSIZE || num > SIZE_MAX) {
         pr_error("Number of verdef entries too large (integer overflow)\n");
         goto err;
     }
@@ -379,36 +1116,34 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
         goto err;
     }
 
-    if (num > 0) {
-        if (read_verdef_entries(phdrs, ptload_idx, tbl_off, (size_t)num, ctx,
-                                &arr, &max_end, &vd_base_idx))
-        {
-            pr_error("Failed to parse the version definition list\n");
-            goto err;
-        }
-        if (max_end < tbl_off || max_end - tbl_off < min_tbl_size) {
-            pr_error("Read an incorrect number of bytes "
-                     "(something has gone seriously wrong)\n");
-            goto err;
-        }
-        min_tbl_size = max_end - tbl_off;
+    if (read_verdef_entries(phdrs, ptload_idx, tbl_off, (size_t)num, ctx,
+                            &arr, &max_end, &vd_base_idx))
+    {
+        pr_error("Failed to parse the version definition list\n");
+        goto err;
+    }
+    if (max_end < tbl_off || max_end - tbl_off < min_tbl_size) {
+        pr_error("Read an incorrect number of bytes "
+                 "(something has gone seriously wrong)\n");
+        goto err;
+    }
+    min_tbl_size = max_end - tbl_off;
 
-        /* Sanity check */
+    /* Sanity check */
+    {
+        elf_idx_t tmp = ELF_IDX_NULL;
+        if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
+                                           NULL, &tmp) || tmp != ptload_idx)
         {
-            elf_idx_t tmp = ELF_IDX_NULL;
-            if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
-                                               NULL, &tmp) || tmp != ptload_idx)
-            {
-                pr_error("Full verdef table not backed by the "
-                         "correct PT_LOAD segment\n");
-                goto err;
-            }
-        }
-
-        if (validate_verdef_names(arr, num, ctx)) {
-            pr_error("Invalid verdef names/dependencies\n");
+            pr_error("Full verdef table not backed by the "
+                     "correct PT_LOAD segment\n");
             goto err;
         }
+    }
+
+    if (validate_verdef_relations(arr, num, ctx)) {
+        pr_error("Invalid verdef name relations\n");
+        goto err;
     }
 
     if (validate_sht_gnu_verXXX_if_exists(shdrs, ctx->strtab->shdr,
@@ -419,6 +1154,7 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
         goto err;
     }
 
+    out->present = true;
     out->num = num;
     out->arr = arr; arr = NULL;
     out->base_idx = vd_base_idx;
@@ -432,6 +1168,83 @@ static int parse_verdef(const struct elf_phdrs *phdrs,
 err:
     if (arr != NULL) {
         for (Elf64_Xword i = 0; i < num; i++) {
+            if (arr[i].aux_list != NULL) {
+                free(arr[i].aux_list);
+                arr[i].aux_list = NULL;
+            }
+        }
+        free(arr);
+        arr = NULL;
+    }
+    return 1;
+}
+
+static int read_verdef_entries(
+        const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
+        Elf64_Off start_off, size_t num, struct ver_parsing_ctx *ctx,
+
+        struct elf_dyn_sym_ver_def_ent **out, Elf64_Off *out_max_end,
+        elf_idx_t *out_base_idx
+)
+{
+    *out = NULL;
+    *out_base_idx = ELF_IDX_NULL;
+    *out_max_end = 0;
+    struct elf_dyn_sym_ver_def_ent *arr = NULL;
+    Elf64_Off max_end = 0;
+
+    elf_idx_t vd_base_idx = ELF_IDX_NULL;
+    Elf64_Off off;
+
+    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
+    const Elf64_Off ptload_end = ptload->p_offset + ptload->p_filesz;
+
+    assert(ptload_end >= VERDEF_ENTSIZE && ptload_end >= VERDAUX_ENTSIZE);
+    assert(num > 0);
+
+    arr = calloc(num, sizeof(struct elf_dyn_sym_ver_def_ent));
+    if (arr == NULL) {
+        pr_error("Failed to allocate the verdef entries array\n");
+        goto err;
+    }
+    for (size_t i = 0; i < num; i++) arr[i].aux_list = NULL;
+
+    off = start_off;
+    for (size_t i = 0; i < num; i++) {
+        const bool is_last = (i == num - 1);
+        bool is_base = false;
+        if (read_validate_verdef_entry(ptload_end, is_last, ctx, &max_end, &off,
+                                       &arr[i], &is_base))
+        {
+            pr_error("Failed to parse version definition entry no %zu\n", i);
+            goto err;
+        }
+
+        if (is_base) {
+            if (vd_base_idx != ELF_IDX_NULL) {
+                pr_error("More than one verdef entry has the BASE flag set\n");
+                goto err;
+            }
+            vd_base_idx = i;
+        }
+    }
+
+    if (vd_base_idx == ELF_IDX_NULL) {
+        pr_error("No BASE verdef entry\n");
+        goto err;
+    } else {
+        pr_debug("BASE Verdef entry: \"%s\"\n", (const char *)
+                 strtab_strptr(ctx, arr[vd_base_idx].aux_list[0].vda_name));
+    }
+
+    *out = arr; arr = NULL;
+    *out_base_idx = vd_base_idx;
+    *out_max_end = max_end;
+    return 0;
+
+err:
+    if (arr != NULL) {
+        for (size_t i = 0; i < num; i++) {
             if (arr[i].aux_list != NULL) {
                 free(arr[i].aux_list);
                 arr[i].aux_list = NULL;
@@ -582,77 +1395,60 @@ err:
     return 1;
 }
 
-static int read_verdef_entries(
-        const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
-        Elf64_Off start_off, size_t num, struct ver_parsing_ctx *ctx,
-
-        struct elf_dyn_sym_ver_def_ent **out, Elf64_Off *out_max_end,
-        elf_idx_t *out_base_idx
+static int read_verdaux_list(
+        const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
+        Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
+        Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
 )
 {
     *out = NULL;
-    *out_base_idx = ELF_IDX_NULL;
-    *out_max_end = 0;
-    struct elf_dyn_sym_ver_def_ent *arr = NULL;
-    Elf64_Off max_end = 0;
+    *out_list_end = 0;
+    Elf64_Off off = 0;
+    Elf64_Verdaux *arr = NULL;
+    Elf64_Off list_end = 0;
 
-    elf_idx_t vd_base_idx = ELF_IDX_NULL;
-    Elf64_Off off;
+    assert(seg_end >= VERDAUX_ENTSIZE);
+    assert(cnt > 0);
 
-    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
-    const Elf64_Off ptload_end = ptload->p_offset + ptload->p_filesz;
-
-    assert(ptload_end >= VERDEF_ENTSIZE && ptload_end >= VERDAUX_ENTSIZE);
-    assert(num > 0);
-
-    arr = calloc(num, sizeof(struct elf_dyn_sym_ver_def_ent));
+    /* `size_t` is guaranteed to be at least 16 bits wide */
+    arr = calloc((size_t)cnt, sizeof(Elf64_Verdaux));
     if (arr == NULL) {
-        pr_error("Failed to allocate the verdef entries array\n");
+        pr_error("Failed to allocate verdef auxiliary info entries list\n");
         goto err;
     }
-    for (size_t i = 0; i < num; i++) arr[i].aux_list = NULL;
 
     off = start_off;
-    for (size_t i = 0; i < num; i++) {
-        const bool is_last = (i == num - 1);
-        bool is_base = false;
-        if (read_validate_verdef_entry(ptload_end, is_last, ctx, &max_end, &off,
-                                       &arr[i], &is_base))
+    for (Elf64_Half i = 0; i < cnt; i++) {
+        const bool is_first = (i == 0);
+        const bool is_last = (i == cnt - 1);
+
+        if (read_validate_verdaux_entry(ctx, vd_hash, seg_end,
+                                        is_first, is_last, max_end_p,
+                                        &off, &arr[i]))
         {
-            pr_error("Failed to parse version definition entry no %zu\n", i);
+            pr_error("Failed to parse verdef auxiliary info entry "
+                     "no %" PRIu16 "\n", i);
             goto err;
         }
-
-        if (is_base) {
-            if (vd_base_idx != ELF_IDX_NULL) {
-                pr_error("More than one verdef entry has the BASE flag set\n");
-                goto err;
-            }
-            vd_base_idx = i;
+        if (is_first) {
+            pr_debug("Verdef entry aux[0]: \"%s\"\n", (const char *)
+                     strtab_strptr(ctx, arr[i].vda_name));
+        } else {
+            pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
+                     (const char *)strtab_strptr(ctx, arr[i].vda_name));
         }
-    }
 
-    if (vd_base_idx == ELF_IDX_NULL) {
-        pr_error("No BASE verdef entry\n");
-        goto err;
-    } else {
-        pr_debug("BASE Verdef entry: \"%s\"\n", (const char *)
-                 strtab_strptr(ctx, arr[vd_base_idx].aux_list[0].vda_name));
+        if (is_last)
+            /* `read_validate_verdaux_entry` safely computes this value */
+            list_end = off + VERDAUX_ENTSIZE;
     }
 
     *out = arr; arr = NULL;
-    *out_base_idx = vd_base_idx;
-    *out_max_end = max_end;
+    *out_list_end = list_end;
     return 0;
 
 err:
     if (arr != NULL) {
-        for (size_t i = 0; i < num; i++) {
-            if (arr[i].aux_list != NULL) {
-                free(arr[i].aux_list);
-                arr[i].aux_list = NULL;
-            }
-        }
         free(arr);
         arr = NULL;
     }
@@ -733,141 +1529,283 @@ static int read_validate_verdaux_entry(
     return 0;
 }
 
-static int read_verdaux_list(
-        const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
-        Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
-        Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
+static int validate_verdef_relations(
+        const struct elf_dyn_sym_ver_def_ent *arr, size_t num,
+        const struct ver_parsing_ctx *ctx
 )
 {
-    *out = NULL;
-    *out_list_end = 0;
-    Elf64_Off off = 0;
-    Elf64_Verdaux *arr = NULL;
-    Elf64_Off list_end = 0;
+    int ret = 0;
+    struct verdef_name_ref *refs = NULL;
 
-    assert(seg_end >= VERDAUX_ENTSIZE);
-    assert(cnt > 0);
+    refs = calloc(num, sizeof(*refs));
+    if (refs == NULL) {
+        pr_error("Failed to allocate verdef name ref structs array\n");
+        ret = -1;
+        goto out;
+    }
+    for (size_t i = 0; i < num; i++) {
+        const Elf64_Word vd_hash = arr[i].vd.vd_hash;
+        const Elf64_Verdaux *const first_aux = &arr[i].aux_list[0];
 
-    /* `size_t` is guaranteed to be at least 16 bits wide */
-    arr = calloc((size_t)cnt, sizeof(Elf64_Verdaux));
-    if (arr == NULL) {
-        pr_error("Failed to allocate verdef auxiliary info entries list\n");
+        refs[i] = (struct verdef_name_ref) {
+            .vd_hash = vd_hash,
+            .name = (const char *)strtab_strptr(ctx, first_aux->vda_name),
+            .self_idx = i
+        };
+    }
+
+    qsort(refs, num, sizeof(*refs), verdef_name_ref_cmp);
+
+    /* Check for duplicates */
+    for (size_t i = 1; i < num; i++) {
+        const struct verdef_name_ref *const curr = &refs[i];
+        const struct verdef_name_ref *const prev = &refs[i - 1];
+
+        if (prev->vd_hash == curr->vd_hash &&
+            !strcmp(prev->name, curr->name))
+        {
+            pr_error("Duplicate verdef name \"%s\"\n", curr->name);
+            ret = 1;
+        }
+    }
+
+    /* Resolve every verdef's Additional (1..nth) verdaux's vda_names
+     * against some other verdef's Primary (0th) verdaux vda_name.
+     *
+     * This is easy because we conveniently have exactly what we need:
+     * a (sorted!) array of verdefs with their verdaux[0] entries. */
+    for (size_t i = 0; i < num; i++) {
+        const struct verdef_name_ref *const curr_ref = &refs[i];
+
+        const struct elf_dyn_sym_ver_def_ent *const curr_verdef =
+            &arr[curr_ref->self_idx];
+
+        for (Elf64_Half j = 1; j < curr_verdef->vd.vd_cnt; j++) {
+
+            const Elf64_Verdaux *const curr_1_n_aux = &curr_verdef->aux_list[j];
+
+            const char *const vda_name = (const char *)
+                strtab_strptr(ctx, curr_1_n_aux->vda_name);
+            assert(vda_name != NULL);
+
+            const struct verdef_name_ref key = {
+                .vd_hash = sysv_hash((const uint8_t *)vda_name),
+                .name = vda_name
+            };
+            const struct verdef_name_ref *const res =
+                bsearch(&key, refs, num, sizeof(*refs), verdef_name_ref_cmp);
+
+            if (res == NULL) {
+                pr_error("Additional verdaux entry \"%s\" doesn't resolve "
+                         "to any verdef's first verdaux entry\n", vda_name);
+                ret = 1;
+            } else if (res->self_idx == curr_ref->self_idx) {
+                pr_error("Verdef \"%s\" depends on itself\n", curr_ref->name);
+                ret = 1;
+            }
+        }
+    }
+
+out:
+    if (refs != NULL) {
+        free(refs);
+        refs = NULL;
+    }
+    return ret;
+}
+
+static int verdef_name_ref_cmp(const void *a_, const void *b_)
+{
+    const struct verdef_name_ref *const a = a_;
+    const struct verdef_name_ref *const b = b_;
+
+    /* Sort the verdef entries by their first aux entries' `vda_name`
+     * while using the `vd_hash` to our advantage */
+
+    if (a->vd_hash < b->vd_hash) return -1;
+    if (a->vd_hash > b->vd_hash) return 1;
+
+    return strcmp(a->name, b->name);
+}
+
+static int parse_verneed(
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries,
+        elf_idx_t dt_verneed_idx, elf_idx_t dt_verneednum_idx,
+        struct ver_parsing_ctx *ctx,
+
+        struct elf_dyn_sym_ver_need *out
+)
+{
+    *out = empty_verneed_st;
+
+    const Elf64_Addr vaddr = entries->arr[dt_verneed_idx].d_un.d_ptr;
+    const Elf64_Xword num = entries->arr[dt_verneednum_idx].d_un.d_val;
+
+    if (num == 0)
+        pr_error("WARNING: Empty DT_VERNEED list\n");
+
+    Elf64_Xword min_tbl_size = 0;
+    elf_idx_t ptload_idx = ELF_IDX_NULL;
+    Elf64_Off tbl_off = 0;
+    struct elf_dyn_sym_ver_need_ent *arr = NULL;
+    Elf64_Off max_end = 0;
+    elf_idx_t sht_gnu_verneed_idx = ELF_IDX_NULL;
+
+    if (num > UINT64_MAX / VERNEED_ENTSIZE || num > SIZE_MAX) {
+        pr_error("Number of verneed entries too large (integer overflow)\n");
+        goto err;
+    }
+    /**
+     * Since `VERNEED_ENTSIZE` is the same as `VERNAUX_ENTSIZE`,
+     * this guarantees that whatever segment we find can contain
+     * at least one ElfXX_Verneed or ElfXX_Vernaux, which means that
+     * `seg_end - VERNEED_ENTSIZE` as well as `seg_end - VERNAUX_ENTSIZE`
+     * never underflow.
+     */
+    min_tbl_size = num * VERNEED_ENTSIZE;
+
+    if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
+                                       &tbl_off, &ptload_idx))
+    {
+        pr_error("Verneed table not contained in any PT_LOAD segment\n");
         goto err;
     }
 
-    off = start_off;
-    for (Elf64_Half i = 0; i < cnt; i++) {
-        const bool is_first = (i == 0);
-        const bool is_last = (i == cnt - 1);
-
-        if (read_validate_verdaux_entry(ctx, vd_hash, seg_end,
-                                        is_first, is_last, max_end_p,
-                                        &off, &arr[i]))
+    if (num > 0) {
+        if (read_verneed_entries(ctx, phdrs, ptload_idx, entries,
+                                 tbl_off, (size_t)num, &arr, &max_end))
         {
-            pr_error("Failed to parse verdef auxiliary info entry "
-                     "no %" PRIu16 "\n", i);
+            pr_error("Failed to parse the version dependency list\n");
             goto err;
         }
-        if (is_first) {
-            pr_debug("Verdef entry aux[0]: \"%s\"\n", (const char *)
-                     strtab_strptr(ctx, arr[i].vda_name));
-        } else {
-            pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
-                     (const char *)strtab_strptr(ctx, arr[i].vda_name));
+        if (max_end < tbl_off || max_end - tbl_off < min_tbl_size) {
+            pr_error("Read an incorrect number of bytes "
+                     "(something has gone seriously wrong)\n");
+            goto err;
+        }
+        min_tbl_size = max_end - tbl_off;
+        /* Sanity check */
+        {
+            elf_idx_t tmp = ELF_IDX_NULL;
+            if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
+                                               NULL, &tmp) || tmp != ptload_idx)
+            {
+                pr_error("Full verneed table not backed by the "
+                         "correct PT_LOAD segment\n");
+                goto err;
+            }
         }
 
-        if (is_last)
-            /* `read_validate_verdaux_entry` safely computes this value */
-            list_end = off + VERDAUX_ENTSIZE;
+        if (validate_verneed_names_uniqueness(arr, (size_t)num, ctx)) {
+            pr_error("Duplicate verneed names\n");
+            goto err;
+        }
     }
 
-    *out = arr; arr = NULL;
-    *out_list_end = list_end;
+    if (validate_sht_gnu_verXXX_if_exists(shdrs, ctx->strtab->shdr,
+                                          vaddr, tbl_off, min_tbl_size, num,
+                                          &sht_gnu_verneed_idx, false))
+    {
+        pr_error("Invalid SHT_GNU_verneed section\n");
+        goto err;
+    }
+
+    out->present = true;
+    out->num = num;
+    out->arr = arr; arr = NULL;
+    out->vaddr = vaddr;
+    out->off = tbl_off;
+    out->dt_verneed_idx = dt_verneed_idx;
+    out->dt_verneednum_idx = dt_verneednum_idx;
+    out->shdr = sht_gnu_verneed_idx;
     return 0;
 
 err:
     if (arr != NULL) {
+        for (Elf64_Xword i = 0; i < num; i++) {
+            if (arr[i].aux_list != NULL) {
+                free(arr[i].aux_list);
+                arr[i].aux_list = NULL;
+            }
+        }
         free(arr);
         arr = NULL;
     }
     return 1;
 }
 
-static int validate_sht_gnu_verXXX_if_exists(
-        const struct elf_shdrs *shdrs, elf_idx_t dynstr_idx,
-        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword min_size, Elf64_Xword num,
-        elf_idx_t *out, bool is_verdef
+static int read_verneed_entries(
+        struct ver_parsing_ctx *ctx,
+        const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
+        const struct elf_dyn_entries *entries,
+        Elf64_Off tbl_off, size_t num,
+
+        struct elf_dyn_sym_ver_need_ent **out, Elf64_Off *out_max_end
 )
 {
-    *out = ELF_IDX_NULL;
+    *out = NULL;
+    *out_max_end = 0;
+    struct elf_dyn_sym_ver_need_ent *arr = NULL;
+    Elf64_Off max_end = 0;
+    Elf64_Off off = 0;
+    struct dt_needed_name *dt_needed_tbl = NULL;
+    size_t n_dt_needed = 0;
 
-    const enum shdr_unique_type type = is_verdef ? shdr_unique_SHT_GNU_verdef :
-                                                   shdr_unique_SHT_GNU_verneed;
-    const char *const name = is_verdef ? "SHT_GNU_verdef" : "SHT_GNU_verneed";
+    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
+    const Elf64_Off ptload_end = ptload->p_offset + ptload->p_filesz;
 
-    const elf_idx_t shdr_idx = find_unique_shdr_by_type(shdrs, type);
-    if (shdr_idx == ELF_IDX_NULL) {
-        pr_debug("No %s section\n", name);
-        return 0;
-    }
-    const Elf64_Shdr *const shdr = &shdrs->arr[shdr_idx];
+    assert(num > 0);
+    assert(ptload_end >= VERNEED_ENTSIZE && ptload_end >= VERNAUX_ENTSIZE);
 
-    if (dynstr_idx == ELF_IDX_NULL) {
-        pr_error("%s exists without a dynstr section\n", name);
-        return 1;
-    }
-
-    int ret = 0;
-
-    if (shdr->sh_addr != vaddr) {
-        pr_error("Invalid %s virtual address\n", name);
-        ret = 1;
+    if (init_dt_needed_name_table(entries, ctx->strtab, ctx->data,
+                                  &dt_needed_tbl, &n_dt_needed))
+    {
+        pr_error("Failed to initialize the DT_NEEDED names hash table\n");
+        goto err;
     }
 
-    if (shdr->sh_offset != off) {
-        pr_error("Invalid %s offset\n", name);
-        ret = 1;
+    arr = calloc(num, sizeof(struct elf_dyn_sym_ver_need_ent));
+    if (arr == NULL) {
+        pr_error("Failed to allocate the version dependency entries array\n");
+        goto err;
+    }
+    for (size_t i = 0; i < num; i++) arr[i].aux_list = NULL;
+
+    off = tbl_off;
+    for (size_t i = 0; i < num; i++) {
+        const bool is_last = (i == num - 1);
+        if (read_validate_verneed_entry(dt_needed_tbl, n_dt_needed,
+                                        ptload_end, is_last, ctx, &max_end,
+                                        &off, &arr[i]))
+        {
+            pr_error("Failed to parse version dependency information entry "
+                     "no %zu\n", i);
+            goto err;
+        }
     }
 
-    if (shdr->sh_size < min_size) {
-        pr_error("Invalid %s size\n", name);
-        ret = 1;
+    free(dt_needed_tbl); dt_needed_tbl = NULL;
+    *out = arr; arr = NULL;
+    *out_max_end = max_end;
+    return 0;
+
+err:
+    if (arr != NULL) {
+        for (size_t i = 0; i < num; i++) {
+            if (arr[i].aux_list != NULL) {
+                free(arr[i].aux_list);
+                arr[i].aux_list = NULL;
+            }
+        }
+        free(arr);
+        arr = NULL;
     }
-
-    if (shdr->sh_info != num) {
-        pr_error("Invalid value of %s sh_info\n", name);
-        ret = 1;
+    if (dt_needed_tbl != NULL) {
+        free(dt_needed_tbl);
+        dt_needed_tbl = NULL;
     }
-
-    if (shdr->sh_link != dynstr_idx) {
-        pr_error("%s sh_link doesn't point to the dynstr section\n", name);
-        ret = 1;
-    }
-
-    if (shdr->sh_entsize != 0) {
-        pr_error("Invalid %s entsize\n", name);
-        ret = 1;
-    }
-
-    if (!ret)
-        *out = shdr_idx;
-    return ret;
-}
-
-
-struct dt_needed_name {
-    Elf64_Xword entry_val;
-    Elf32_Word hash;
-};
-
-static int dt_needed_name_cmp(const void *a_, const void *b_)
-{
-    const struct dt_needed_name *const a = a_;
-    const struct dt_needed_name *const b = b_;
-
-    if (a->entry_val < b->entry_val) return -1;
-    else if (a->entry_val == b->entry_val) return 0;
-    else /* if (a->entry_val > b->entry_val) */ return 1;
+    return 1;
 }
 
 static int init_dt_needed_name_table(
@@ -949,7 +1887,7 @@ static bool name_is_dt_needed(
 
     /**
      * First, try to check for a DT_NEEDED entry whose value (dynstr offset)
-     * is the exact same as `curr->vn_file`, in which case we definetly know
+     * is the exact same as `curr->vn_file`, in which case we definitely know
      * that the names match.
      *
      * The `dt_needed_tbl` is sorted by the `entry_val` members,
@@ -990,158 +1928,14 @@ static bool name_is_dt_needed(
     return found;
 }
 
-static int read_validate_vernaux_entry(
-        Elf64_Off seg_end, bool is_last_entry, struct ver_parsing_ctx *ctx,
-        Elf64_Off *max_end_p, Elf64_Off *off_p, Elf64_Vernaux *out
-)
+static int dt_needed_name_cmp(const void *a_, const void *b_)
 {
-    *out = (Elf64_Vernaux) { 0 };
+    const struct dt_needed_name *const a = a_;
+    const struct dt_needed_name *const b = b_;
 
-    assert(seg_end >= VERNAUX_ENTSIZE);
-    if (*off_p > seg_end - VERNAUX_ENTSIZE) {
-        pr_error("Vernaux entry overflows segment bounds\n");
-        return 1;
-    }
-    {
-        Elf64_Off tmp = *off_p;
-        if (read_vernaux(ctx->data, &tmp, out)) {
-            pr_error("Failed to read vernaux entry from file data\n");
-            return 1;
-        }
-        if (tmp < *off_p || tmp - *off_p != VERNAUX_ENTSIZE) {
-            pr_error("Incorrect number of bytes read (impossible outcome)\n");
-            return -1;
-        }
-        if (tmp > *max_end_p)
-            *max_end_p = tmp;
-    }
-
-    /* `vna_name`, `vna_hash` */
-    {
-        const uint8_t *const vna_name_str = strtab_strptr(ctx, out->vna_name);
-        if (vna_name_str == NULL) {
-            pr_error("vna_name points outside of string table bounds\n");
-            return 1;
-        }
-        if (sysv_hash(vna_name_str) != out->vna_hash) {
-            pr_error("vna_hash doesn't match the hash of the string "
-                     "referenced by vna_name\n");
-            return 1;
-        }
-    }
-
-    /* `vna_flags` */
-    {
-        const Elf64_Half allowed = VER_FLG_WEAK | VER_FLG_INFO;
-        if (out->vna_flags & (Elf64_Half)~allowed) {
-            pr_error("Invalid vna_flags\n");
-            return 1;
-        }
-    }
-
-    /* `vna_other` */
-    {
-        /* The values `0` and `1` are reserved for the values
-         * `VER_NDX_LOCAL` and `VER_NDX_GLOBAL`, respectively.
-         * However, on some solaris systems the value `0` was historically used
-         * as a placeholder because the linker didn't assign any value then,
-         * so treat that case only as a warning.
-         *
-         * As for the "hidden" flag (bit 15),
-         * there's a difference between how GNU and Solaris systems treat it,
-         * so just let `claim_version_index` ignore it. */
-        const Elf64_Half raw_vndx = out->vna_other;
-        const Elf64_Half real_vndx = out->vna_other & UINT16_C(0x7fff);
-        if (raw_vndx == VER_NDX_LOCAL) {
-            pr_error("WARNING: vna_other is set to the reserved value 0\n");
-        } else if (real_vndx == VER_NDX_LOCAL || real_vndx == VER_NDX_GLOBAL) {
-            pr_error("vna_other is set to a reserved value\n");
-            return 1;
-        } else if (claim_version_index(ctx->seen_vndx_bitmap, raw_vndx)) {
-            pr_error("Duplicate version index in the vna_other field\n");
-            return 1;
-        }
-    }
-
-    /* `vna_next` */
-    {
-        if (out->vna_next != 0 && out->vna_next < VERNAUX_ENTSIZE) {
-            pr_error("The value of vna_next places the next entry "
-                     "inside the current one\n");
-            return 1;
-        }
-        if (is_last_entry) {
-            if (out->vna_next != 0) {
-                pr_error("Unterminated of vernaux entry list\n");
-                return 1;
-            }
-        } else {
-            if (out->vna_next == 0) {
-                pr_error("Early termination of vernaux entry list\n");
-                return 1;
-            }
-
-            if (out->vna_next > seg_end - *off_p) {
-                pr_error("Next vernaux entry offset overflows load segment\n");
-                return 1;
-            }
-            *off_p += out->vna_next;
-        }
-    }
-
-    return 0;
-}
-
-static int read_vernaux_list(
-        struct ver_parsing_ctx *ctx, Elf64_Off seg_end,
-        Elf64_Off start_off, Elf64_Half cnt, Elf64_Off *max_end_p,
-        Elf64_Vernaux **out, Elf64_Off *out_list_end
-)
-{
-    Elf64_Off off = 0;
-    Elf64_Vernaux *arr = NULL;
-    Elf64_Off list_end = 0;
-    *out = NULL;
-    *out_list_end = 0;
-
-    assert(seg_end >= VERNAUX_ENTSIZE);
-    assert(cnt > 0);
-
-    /* `size_t` is guaranteed to be at least 16 bits wide */
-    arr = calloc((size_t)cnt, sizeof(Elf64_Vernaux));
-    if (arr == NULL) {
-        pr_error("Failed to allocate verneed auxiliary info entries list\n");
-        goto err;
-    }
-
-    off = start_off;
-    for (Elf64_Half i = 0; i < cnt; i++) {
-        const bool is_last = (i == cnt - 1);
-        if (read_validate_vernaux_entry(seg_end, is_last, ctx, max_end_p,
-                                        &off, &arr[i]))
-        {
-            pr_error("Failed to read verneed auxiliary info entry "
-                     "no %" PRIu16 "\n", i);
-            goto err;
-        }
-
-        pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
-                 (const char *)strtab_strptr(ctx, arr[i].vna_name));
-        if (is_last)
-            /* `read_validate_vernaux_entry` safely computes this value */
-            list_end = off + VERNAUX_ENTSIZE;
-    }
-
-    *out = arr; arr = NULL;
-    *out_list_end = list_end;
-    return 0;
-
-err:
-    if (arr != NULL) {
-        free(arr);
-        arr = NULL;
-    }
-    return 1;
+    if (a->entry_val < b->entry_val) return -1;
+    else if (a->entry_val == b->entry_val) return 0;
+    else /* if (a->entry_val > b->entry_val) */ return 1;
 }
 
 static int read_validate_verneed_entry(
@@ -1261,104 +2055,158 @@ err:
     return 1;
 }
 
-static int read_verneed_entries(
-        struct ver_parsing_ctx *ctx,
-        const struct elf_phdrs *phdrs, elf_idx_t ptload_idx,
-        const struct elf_dyn_entries *entries,
-        Elf64_Off tbl_off, size_t num,
-
-        struct elf_dyn_sym_ver_need_ent **out, Elf64_Off *out_max_end
+static int read_vernaux_list(
+        struct ver_parsing_ctx *ctx, Elf64_Off seg_end,
+        Elf64_Off start_off, Elf64_Half cnt, Elf64_Off *max_end_p,
+        Elf64_Vernaux **out, Elf64_Off *out_list_end
 )
 {
-    *out = NULL;
-    *out_max_end = 0;
-    struct elf_dyn_sym_ver_need_ent *arr = NULL;
-    Elf64_Off max_end = 0;
     Elf64_Off off = 0;
-    struct dt_needed_name *dt_needed_tbl = NULL;
-    size_t n_dt_needed = 0;
+    Elf64_Vernaux *arr = NULL;
+    Elf64_Off list_end = 0;
+    *out = NULL;
+    *out_list_end = 0;
 
-    const Elf64_Phdr *const ptload = &phdrs->arr[ptload_idx];
-    const Elf64_Off ptload_end = ptload->p_offset + ptload->p_filesz;
+    assert(seg_end >= VERNAUX_ENTSIZE);
+    assert(cnt > 0);
 
-    assert(num > 0);
-    assert(ptload_end >= VERNEED_ENTSIZE && ptload_end >= VERNAUX_ENTSIZE);
-
-    if (init_dt_needed_name_table(entries, ctx->strtab, ctx->data,
-                                  &dt_needed_tbl, &n_dt_needed))
-    {
-        pr_error("Failed to initialize the DT_NEEDED names hash table\n");
-        goto err;
-    }
-
-    arr = calloc(num, sizeof(struct elf_dyn_sym_ver_need_ent));
+    /* `size_t` is guaranteed to be at least 16 bits wide */
+    arr = calloc((size_t)cnt, sizeof(Elf64_Vernaux));
     if (arr == NULL) {
-        pr_error("Failed to allocate the version dependency entries array\n");
+        pr_error("Failed to allocate verneed auxiliary info entries list\n");
         goto err;
     }
-    for (size_t i = 0; i < num; i++) arr[i].aux_list = NULL;
 
-    off = tbl_off;
-    for (size_t i = 0; i < num; i++) {
-        const bool is_last = (i == num - 1);
-        if (read_validate_verneed_entry(dt_needed_tbl, n_dt_needed,
-                                        ptload_end, is_last, ctx, &max_end,
+    off = start_off;
+    for (Elf64_Half i = 0; i < cnt; i++) {
+        const bool is_last = (i == cnt - 1);
+        if (read_validate_vernaux_entry(seg_end, is_last, ctx, max_end_p,
                                         &off, &arr[i]))
         {
-            pr_error("Failed to parse version dependency information entry "
-                     "no %zu\n", i);
+            pr_error("Failed to read verneed auxiliary info entry "
+                     "no %" PRIu16 "\n", i);
             goto err;
         }
+
+        pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
+                 (const char *)strtab_strptr(ctx, arr[i].vna_name));
+        if (is_last)
+            /* `read_validate_vernaux_entry` safely computes this value */
+            list_end = off + VERNAUX_ENTSIZE;
     }
 
-    free(dt_needed_tbl); dt_needed_tbl = NULL;
     *out = arr; arr = NULL;
-    *out_max_end = max_end;
+    *out_list_end = list_end;
     return 0;
 
 err:
     if (arr != NULL) {
-        for (size_t i = 0; i < num; i++) {
-            if (arr[i].aux_list != NULL) {
-                free(arr[i].aux_list);
-                arr[i].aux_list = NULL;
-            }
-        }
         free(arr);
         arr = NULL;
-    }
-    if (dt_needed_tbl != NULL) {
-        free(dt_needed_tbl);
-        dt_needed_tbl = NULL;
     }
     return 1;
 }
 
-struct verneed_name_ref {
-    const char *vn_file;
-    const char *vna_name;
-    Elf64_Word vna_hash;
-};
-
-static int verneed_name_ref_cmp(const void *a_, const void *b_)
+static int read_validate_vernaux_entry(
+        Elf64_Off seg_end, bool is_last_entry, struct ver_parsing_ctx *ctx,
+        Elf64_Off *max_end_p, Elf64_Off *off_p, Elf64_Vernaux *out
+)
 {
-    const struct verneed_name_ref *const a = a_;
-    const struct verneed_name_ref *const b = b_;
+    *out = (Elf64_Vernaux) { 0 };
 
-    /* Sort the vernaux entries by (parent vn_file, vna_version)
-     * while using the `vna_hash` to our advantage */
+    assert(seg_end >= VERNAUX_ENTSIZE);
+    if (*off_p > seg_end - VERNAUX_ENTSIZE) {
+        pr_error("Vernaux entry overflows segment bounds\n");
+        return 1;
+    }
+    {
+        Elf64_Off tmp = *off_p;
+        if (read_vernaux(ctx->data, &tmp, out)) {
+            pr_error("Failed to read vernaux entry from file data\n");
+            return 1;
+        }
+        if (tmp < *off_p || tmp - *off_p != VERNAUX_ENTSIZE) {
+            pr_error("Incorrect number of bytes read (impossible outcome)\n");
+            return -1;
+        }
+        if (tmp > *max_end_p)
+            *max_end_p = tmp;
+    }
 
-    /* Different parent `vn_file` */
-    int r = strcmp(a->vn_file, b->vn_file);
-    if (r != 0)
-        return r;
+    /* `vna_name`, `vna_hash` */
+    {
+        const uint8_t *const vna_name_str = strtab_strptr(ctx, out->vna_name);
+        if (vna_name_str == NULL) {
+            pr_error("vna_name points outside of string table bounds\n");
+            return 1;
+        }
+        if (sysv_hash(vna_name_str) != out->vna_hash) {
+            pr_error("vna_hash doesn't match the hash of the string "
+                     "referenced by vna_name\n");
+            return 1;
+        }
+    }
 
-    /* Different `vna_hash` */
-    if (a->vna_hash < b->vna_hash) return -1;
-    if (a->vna_hash > b->vna_hash) return 1;
+    /* `vna_flags` */
+    {
+        const Elf64_Half allowed = VER_FLG_WEAK | VER_FLG_INFO;
+        if (out->vna_flags & (Elf64_Half)~allowed) {
+            pr_error("Invalid vna_flags\n");
+            return 1;
+        }
+    }
 
-    /* Same `vna_hash`, different `vna_name` */
-    return strcmp(a->vna_name, b->vna_name);
+    /* `vna_other` */
+    {
+        /* The values `0` and `1` are reserved for the values
+         * `VER_NDX_LOCAL` and `VER_NDX_GLOBAL`, respectively.
+         * However, on some solaris systems the value `0` was historically used
+         * as a placeholder because the linker didn't assign any value then,
+         * so treat that case only as a warning.
+         *
+         * As for the "hidden" flag (bit 15),
+         * there's a difference between how GNU and Solaris systems treat it,
+         * so just let `claim_version_index` ignore it. */
+        const Elf64_Half raw_vndx = out->vna_other;
+        const Elf64_Half real_vndx = out->vna_other & UINT16_C(0x7fff);
+        if (raw_vndx == VER_NDX_LOCAL) {
+            pr_error("WARNING: vna_other is set to the reserved value 0\n");
+        } else if (real_vndx == VER_NDX_LOCAL || real_vndx == VER_NDX_GLOBAL) {
+            pr_error("vna_other is set to a reserved value\n");
+            return 1;
+        } else if (claim_version_index(ctx->seen_vndx_bitmap, raw_vndx)) {
+            pr_error("Duplicate version index in the vna_other field\n");
+            return 1;
+        }
+    }
+
+    /* `vna_next` */
+    {
+        if (out->vna_next != 0 && out->vna_next < VERNAUX_ENTSIZE) {
+            pr_error("The value of vna_next places the next entry "
+                     "inside the current one\n");
+            return 1;
+        }
+        if (is_last_entry) {
+            if (out->vna_next != 0) {
+                pr_error("Unterminated of vernaux entry list\n");
+                return 1;
+            }
+        } else {
+            if (out->vna_next == 0) {
+                pr_error("Early termination of vernaux entry list\n");
+                return 1;
+            }
+
+            if (out->vna_next > seg_end - *off_p) {
+                pr_error("Next vernaux entry offset overflows load segment\n");
+                return 1;
+            }
+            *off_p += out->vna_next;
+        }
+    }
+
+    return 0;
 }
 
 static int validate_verneed_names_uniqueness(
@@ -1383,6 +2231,7 @@ static int validate_verneed_names_uniqueness(
         total_aux += (size_t)vn_cnt;
     }
 
+    /* Allocation and initialization */
     refs = calloc(total_aux, sizeof(*refs));
     if (refs == NULL) {
         pr_error("Failed to allocate the verneed name ref structs array\n");
@@ -1415,6 +2264,7 @@ static int validate_verneed_names_uniqueness(
 
     qsort(refs, total_aux, sizeof(*refs), verneed_name_ref_cmp);
 
+    /* Duplicates check */
     for (size_t i = 1; i < total_aux; i++) {
         const struct verneed_name_ref *const prev = &refs[i - 1];
         const struct verneed_name_ref *const curr = &refs[i];
@@ -1437,108 +2287,84 @@ out:
     return ret;
 }
 
-static int parse_verneed(
-        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
-        const struct elf_dyn_entries *entries,
-        elf_idx_t dt_verneed_idx, elf_idx_t dt_verneednum_idx,
-        struct ver_parsing_ctx *ctx,
+static int verneed_name_ref_cmp(const void *a_, const void *b_)
+{
+    const struct verneed_name_ref *const a = a_;
+    const struct verneed_name_ref *const b = b_;
 
-        struct elf_dyn_sym_ver_need *out
+    /* Sort the vernaux entries by (parent vn_file, vna_name)
+     * while using the `vna_hash` to our advantage */
+
+    /* Different parent `vn_file` */
+    int r = strcmp(a->vn_file, b->vn_file);
+    if (r != 0)
+        return r;
+
+    /* Different `vna_hash` */
+    if (a->vna_hash < b->vna_hash) return -1;
+    if (a->vna_hash > b->vna_hash) return 1;
+
+    /* Same `vna_hash`, different `vna_name` */
+    return strcmp(a->vna_name, b->vna_name);
+}
+
+static int validate_sht_gnu_verXXX_if_exists(
+        const struct elf_shdrs *shdrs, elf_idx_t dynstr_idx,
+        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword min_size, Elf64_Xword num,
+        elf_idx_t *out, bool is_verdef
 )
 {
-    *out = empty_verneed_ctx;
+    *out = ELF_IDX_NULL;
 
-    const Elf64_Addr vaddr = entries->arr[dt_verneed_idx].d_un.d_ptr;
-    const Elf64_Xword num = entries->arr[dt_verneednum_idx].d_un.d_val;
+    const enum shdr_unique_type type = is_verdef ? shdr_unique_SHT_GNU_verdef :
+                                                   shdr_unique_SHT_GNU_verneed;
+    const char *const name = is_verdef ? "SHT_GNU_verdef" : "SHT_GNU_verneed";
 
-    if (num == 0)
-        pr_error("WARNING: Empty DT_VERNEED list\n");
-
-    Elf64_Xword min_tbl_size = 0;
-    elf_idx_t ptload_idx = ELF_IDX_NULL;
-    Elf64_Off tbl_off = 0;
-    struct elf_dyn_sym_ver_need_ent *arr = NULL;
-    Elf64_Off max_end = 0;
-    elf_idx_t sht_gnu_verneed_idx = ELF_IDX_NULL;
-
-    if (num > UINT64_MAX / VERNEED_ENTSIZE || num > SIZE_MAX) {
-        pr_error("Number of verneed entries too large (integer overflow)\n");
-        goto err;
+    const elf_idx_t shdr_idx = find_unique_shdr_by_type(shdrs, type);
+    if (shdr_idx == ELF_IDX_NULL) {
+        pr_debug("No %s section\n", name);
+        return 0;
     }
-    /**
-     * Since `VERNEED_ENTSIZE` is the same as `VERNAUX_ENTSIZE`,
-     * this guarantees that whatever segment we find can contain
-     * at least one ElfXX_Verneed or ElfXX_Vernaux, which means that
-     * `seg_end - VERNEED_ENTSIZE` as well as `seg_end - VERNAUX_ENTSIZE`
-     * never underflow.
-     */
-    min_tbl_size = num * VERNEED_ENTSIZE;
+    const Elf64_Shdr *const shdr = &shdrs->arr[shdr_idx];
 
-    if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
-                                       &tbl_off, &ptload_idx))
-    {
-        pr_error("Verneed table not contained in any PT_LOAD segment\n");
-        goto err;
+    if (dynstr_idx == ELF_IDX_NULL) {
+        pr_error("%s exists without a dynstr section\n", name);
+        return 1;
     }
 
-    if (num > 0) {
-        if (read_verneed_entries(ctx, phdrs, ptload_idx, entries,
-                                 tbl_off, (size_t)num, &arr, &max_end))
-        {
-            pr_error("Failed to parse the version dependency list\n");
-            goto err;
-        }
-        if (max_end < tbl_off || max_end - tbl_off < min_tbl_size) {
-            pr_error("Read an incorrect number of bytes "
-                     "(something has gone seriously wrong)\n");
-            goto err;
-        }
-        min_tbl_size = max_end - tbl_off;
-        /* Sanity check */
-        {
-            elf_idx_t tmp = ELF_IDX_NULL;
-            if (find_ptload_and_off_from_vaddr(vaddr, min_tbl_size, phdrs,
-                                               NULL, &tmp) || tmp != ptload_idx)
-            {
-                pr_error("Full verneed table not backed by the "
-                         "correct PT_LOAD segment\n");
-                goto err;
-            }
-        }
+    int ret = 0;
 
-        if (validate_verneed_names_uniqueness(arr, (size_t)num, ctx)) {
-            pr_error("Duplicate verneed names\n");
-            goto err;
-        }
+    if (shdr->sh_addr != vaddr) {
+        pr_error("Invalid %s virtual address\n", name);
+        ret = 1;
     }
 
-    if (validate_sht_gnu_verXXX_if_exists(shdrs, ctx->strtab->shdr,
-                                          vaddr, tbl_off, min_tbl_size, num,
-                                          &sht_gnu_verneed_idx, false))
-    {
-        pr_error("Invalid SHT_GNU_verneed section\n");
-        goto err;
+    if (shdr->sh_offset != off) {
+        pr_error("Invalid %s offset\n", name);
+        ret = 1;
     }
 
-    out->num = num;
-    out->arr = arr; arr = NULL;
-    out->vaddr = vaddr;
-    out->off = tbl_off;
-    out->dt_verneed_idx = dt_verneed_idx;
-    out->dt_verneednum_idx = dt_verneednum_idx;
-    out->shdr = sht_gnu_verneed_idx;
-    return 0;
-
-err:
-    if (arr != NULL) {
-        for (Elf64_Xword i = 0; i < num; i++) {
-            if (arr[i].aux_list != NULL) {
-                free(arr[i].aux_list);
-                arr[i].aux_list = NULL;
-            }
-        }
-        free(arr);
-        arr = NULL;
+    if (shdr->sh_size < min_size) {
+        pr_error("Invalid %s size\n", name);
+        ret = 1;
     }
-    return 1;
+
+    if (shdr->sh_info != num) {
+        pr_error("Invalid value of %s sh_info\n", name);
+        ret = 1;
+    }
+
+    if (shdr->sh_link != dynstr_idx) {
+        pr_error("%s sh_link doesn't point to the dynstr section\n", name);
+        ret = 1;
+    }
+
+    if (shdr->sh_entsize != 0) {
+        pr_error("Invalid %s entsize\n", name);
+        ret = 1;
+    }
+
+    if (!ret)
+        *out = shdr_idx;
+    return ret;
 }

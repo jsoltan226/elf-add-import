@@ -143,4 +143,46 @@ int parse_dyn(const ElfFileData *data,
               struct elf_dynamic *out,
               Elf64_Half *out_dynentsize, Elf64_Half *out_dynsymentsize);
 
+
+/**
+ * The `elf_dyn_entries` structure
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_dyn_entries) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_dyn_entries empty_dyn_entries_st = {
+    .num = 0, .size = 0,
+    .arr = NULL,
+    .dirty = false
+};
+
+/**
+ * The `elf_dyn_strtab` structure
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_strtab empty_dyn_strtab_st = {
+    .vaddr = 0, .off = 0, .size = 0,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
+ * The `elf_dynamic` structure
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_dynamic empty_elf_dynamic_st = {
+    .entries = empty_dyn_entries_st,
+    .phdr = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL,
+    .strtab = empty_dyn_strtab_st,
+
+    .hash = empty_hash_st,
+    .gnu_hash = empty_gnu_hash_st,
+    .symtab = empty_symtab_st,
+    .symtab_shndx = empty_symtab_shndx_st,
+
+    .sym_ver = empty_ver_st
+};
+
 #endif /* ELF_DYN_PARSING_H_ */

@@ -1,6 +1,10 @@
 #ifndef ELF_DYN_SYM_VER_PARSING_H_
 #define ELF_DYN_SYM_VER_PARSING_H_
 
+/**
+ * @file The module that parses GNU-style dynamic symbol version information.
+ */
+
 #include "util.h"
 
 struct elf_phdrs;
@@ -244,5 +248,57 @@ int parse_ver(const struct elf_phdrs *phdrs,
               const struct elf_dyn_entries *entries,
               const ElfFileData *data,
               struct elf_dyn_sym_ver *out);
+
+/**
+ * The verdef `elf_dyn_sym_ver_def` struct
+ * initialized to semantically empty values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_sym_ver_def empty_verdef_st = {
+    .present = false,
+    .num = 0, .arr = NULL,
+    .base_idx = ELF_IDX_NULL,
+    .vaddr = 0, .off = 0,
+    .dt_verdef_idx = ELF_IDX_NULL, .dt_verdefnum_idx = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
+ * The verneed `elf_dyn_sym_ver_need` struct
+ * initialized to semantically empty values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_sym_ver_need empty_verneed_st = {
+    .present = false,
+    .num = 0, .arr = NULL,
+    .vaddr = 0, .off = 0,
+    .dt_verneed_idx = ELF_IDX_NULL, .dt_verneednum_idx = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
+ * The versym `elf_dyn_sym_ver_sym` struct
+ * initialized to semantically empty values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_sym_ver_sym empty_versym_st = {
+    .num = 0, .arr = NULL,
+    .vaddr = 0, .off = 0, .size = 0,
+    .dt_versym_idx = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
+ * The top-level `elf_dyn_sym_ver` struct
+ * initialized to semantically empty values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_sym_ver empty_ver_st = {
+    .present = false,
+    .def = empty_verdef_st,
+    .need = empty_verneed_st,
+    .sym = empty_versym_st
+};
+
 
 #endif /* ELF_DYN_SYM_VER_PARSING_H_ */

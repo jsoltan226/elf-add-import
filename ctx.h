@@ -11,23 +11,6 @@
 #include <assert.h>
 
 /**
- * @typedef Used to refer to entries in arrays of in-memory ELF structures,
- * such as the program and section headers and the dynamic entries.
- *
- * Note: Shrinking or inserting an element into an array invalidates
- * the corresponding `elf_idx_t` references. This is not an issue now as
- * currently any modifications done only append elements or
- * modify them in-place, but it is something worth keeping in mind.
- */
-typedef Elf64_Xword elf_idx_t;
-
-/**
- * @define
- * Sentinel value for `elf_idx_t` which indicates that an index is invalid.
- */
-#define ELF_IDX_NULL ((Elf64_Xword)-1)
-
-/**
  * @brief ELF file parsing & patching context.
  *
  * @struct elf
@@ -349,5 +332,85 @@ const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx);
  * @param[in,out] elf The ELF context to destroy.
  */
 void destroy_elf(struct elf *elf);
+
+/**
+ * The ELF identification bytes struct
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_ident) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_ident empty_elf_ident_st = {
+    .magic = { 0 },
+    .clazz = ELFCLASSNONE,
+    .data = ELFDATANONE,
+    .version = EV_NONE,
+    .os_abi = ELFOSABI_NONE,
+    .abi_version = 0,
+    .pad_ = { 0 }
+};
+
+/**
+ * The ELF read-only-after-init original data structure
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_orig_data) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_orig_data empty_elf_orig_data_st = {
+    .ehdr = empty_elf64_ehdr_st,
+    .phnum = 0, .phsize = 0,
+    .shnum = 0, .shsize = 0,
+    .shstrndx = 0,
+    .dyn_strtab_vaddr = 0,
+    .dyn_strtab_off = 0,
+    .dyn_strtab_sz = 0
+};
+
+/**
+ * The ELF program headers array structure
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_phdrs) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_phdrs empty_elf_phdrs_st = {
+    .num = 0,
+    .size = 0,
+    .arr = NULL,
+    .dirty = false
+};
+
+/**
+ * The ELF section headers array structure
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_shdrs) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_shdrs empty_elf_shdrs_st = {
+    .num = 0,
+    .size = 0,
+    .arr = NULL,
+    .dirty = false
+};
+
+/**
+ * The whole ELF context structure
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf empty_elf_ctx_st = {
+    .ident = empty_elf_ident_st,
+    .orig = empty_elf_orig_data_st,
+    .phentsize = 0,
+    .dynentsize = 0,
+
+    .ehdr = empty_elf64_ehdr_st,
+    .ehdr_dirty = false,
+    .shstrndx = 0,
+    .phdrs = empty_elf_phdrs_st,
+    .shdrs = empty_elf_shdrs_st,
+
+    .dyn = empty_elf_dynamic_st,
+
+    .data = empty_elf_file_data_st
+};
 
 #endif /* CTX_H_ */

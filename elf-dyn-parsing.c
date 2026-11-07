@@ -148,15 +148,7 @@ int parse_dyn(const ElfFileData *data,
         return -1;
     }
 
-    struct elf_dynamic dyn = { 0 };
-    dyn.phdr = ELF_IDX_NULL;
-    dyn.shdr = ELF_IDX_NULL;
-    dyn.strtab.shdr = ELF_IDX_NULL;
-    dyn.hash.dyn_entry = ELF_IDX_NULL; dyn.hash.shdr = ELF_IDX_NULL;
-    dyn.gnu_hash.dyn_entry = ELF_IDX_NULL; dyn.gnu_hash.shdr = ELF_IDX_NULL;
-    dyn.symtab_shndx.dyn_entry = dyn.symtab_shndx.shdr = ELF_IDX_NULL;
-    dyn.symtab.dt_symtab = dyn.symtab.dt_syment = ELF_IDX_NULL;
-    dyn.symtab.shdr = ELF_IDX_NULL;
+    struct elf_dynamic dyn = empty_elf_dynamic_st;
     if (out != NULL) *out = dyn;
     if (out_dynentsize != NULL) *out_dynentsize = 0;
     if (out_dynsymentsize != NULL) *out_dynsymentsize = 0;
@@ -242,7 +234,7 @@ err:
     if (!ret && out_dynsymentsize != NULL)
         *out_dynsymentsize = dyn.symtab.entsize;
 
-    dyn = (struct elf_dynamic) { 0 };
+    dyn = empty_elf_dynamic_st;
 
     return ret;
 }
@@ -359,7 +351,7 @@ static int parse_dyn_table(
         struct elf_dyn_entries *out
 )
 {
-    *out = (struct elf_dyn_entries) { 0 };
+    *out = empty_dyn_entries_st;
 
     if (pt_dynamic_idx == ELF_IDX_NULL) {
         pr_error("Invalid PT_DYNAMIC program header index\n");
@@ -434,7 +426,7 @@ static int parse_dynstr(
         struct elf_dyn_strtab *out
 )
 {
-    memset(out, 0, sizeof(struct elf_dyn_strtab));
+    *out = empty_dyn_strtab_st;
 
     /* Locate the dynamic string table */
     Elf64_Addr strtab_addr = 0;

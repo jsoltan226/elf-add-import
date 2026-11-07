@@ -784,22 +784,10 @@ int parse_dynsym(
     struct elf_dyn_symtab_shndx *out_symtab_shndx, struct elf_dyn_symtab *out
 )
 {
-    *out_hash = (struct elf_dt_hash) { 0 };
-    out_hash->dyn_entry = ELF_IDX_NULL;
-    out_hash->shdr = ELF_IDX_NULL;
-
-    *out_gnu_hash = (struct elf_dt_gnu_hash) { 0 };
-    out_gnu_hash->dyn_entry = ELF_IDX_NULL;
-    out_gnu_hash->shdr = ELF_IDX_NULL;
-
-    *out_symtab_shndx = (struct elf_dyn_symtab_shndx) { 0 };
-    out_symtab_shndx->dyn_entry = ELF_IDX_NULL;
-    out_symtab_shndx->shdr = ELF_IDX_NULL;
-
-    *out = (struct elf_dyn_symtab) { 0 };
-    out->dt_symtab = ELF_IDX_NULL;
-    out->dt_syment = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out_hash = empty_hash_st;
+    *out_gnu_hash = empty_gnu_hash_st;
+    *out_symtab_shndx = empty_symtab_shndx_st;
+    *out = empty_symtab_st;
 
     Elf64_Sym *sym_arr = NULL;
 
@@ -919,18 +907,13 @@ err:
     }
     /* if (out->syms != NULL) can never be true
         free(out->syms); */
-    *out = (struct elf_dyn_symtab) { 0 };
-    out->dt_symtab = ELF_IDX_NULL;
-    out->dt_syment = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out = empty_symtab_st;
 
     if (out_hash->buckets != NULL)
         free(out_hash->buckets);
     if (out_hash->chain != NULL)
         free(out_hash->chain);
-    *out_hash = (struct elf_dt_hash) { 0 };
-    out_hash->dyn_entry = ELF_IDX_NULL;
-    out_hash->shdr = ELF_IDX_NULL;
+    *out_hash = empty_hash_st;
 
     if (out_gnu_hash->bloom != NULL)
         free(out_gnu_hash->bloom);
@@ -938,15 +921,11 @@ err:
         free(out_gnu_hash->buckets);
     if (out_gnu_hash->chain != NULL)
         free(out_gnu_hash->chain);
-    *out_gnu_hash = (struct elf_dt_gnu_hash) { 0 };
-    out_gnu_hash->dyn_entry = ELF_IDX_NULL;
-    out_gnu_hash->shdr = ELF_IDX_NULL;
+    *out_gnu_hash = empty_gnu_hash_st;
 
     if (out_symtab_shndx->arr != NULL)
         free(out_symtab_shndx->arr);
-    *out_symtab_shndx = (struct elf_dyn_symtab_shndx) { 0 };
-    out_symtab_shndx->dyn_entry = ELF_IDX_NULL;
-    out_symtab_shndx->shdr = ELF_IDX_NULL;
+    *out_symtab_shndx = empty_symtab_shndx_st;
 
     return 1;
 }
@@ -1070,9 +1049,7 @@ static int parse_dt_hash(
         struct elf_dt_hash *out
 )
 {
-    *out = (struct elf_dt_hash) { 0 };
-    out->dyn_entry = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out = empty_hash_st;
 
     int ret = 0;
     uint64_t off = 0, end = 0;
@@ -1113,9 +1090,7 @@ err:
     if (out->chain != NULL)
         free(out->chain);
 
-    *out = (struct elf_dt_hash) { 0 };
-    out->dyn_entry = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out = empty_hash_st;
     return ret;
 }
 
@@ -1124,9 +1099,7 @@ static int find_dt_hash(
         const struct elf_dyn_entries *entries, struct elf_dt_hash *out
 )
 {
-    *out = (struct elf_dt_hash) { 0 };
-    out->dyn_entry = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out = empty_hash_st;
 
     /* Find the vaddr, file offset and containing PT_LOAD */
     elf_idx_t dt_hash_idx = ELF_IDX_NULL;
@@ -1362,7 +1335,7 @@ static int parse_dt_gnu_hash(
         struct elf_dt_gnu_hash *out
 )
 {
-    *out = (struct elf_dt_gnu_hash) { 0 };
+    *out = empty_gnu_hash_st;
 
     elf_idx_t ptload = ELF_IDX_NULL;
     Elf32_Word max_bucket = 0;
@@ -1458,12 +1431,15 @@ err:
         free(out->bloom);
         out->bloom = NULL;
     }
+    *out = empty_gnu_hash_st;
     return ret;
 }
 
 static int read_dt_gnu_hash_hdr(const ElfFileData *data, Elf64_Off *off_p,
                                 struct elf_dt_gnu_hash_hdr *out)
 {
+    *out = empty_gnu_hash_hdr_st;
+
     const uint64_t start_off = *off_p;
     if (start_off > UINT64_MAX - DT_GNU_HASH_HDR_SIZE)
         return -1;
@@ -1516,9 +1492,7 @@ static int find_dt_gnu_hash(
         struct elf_dt_gnu_hash *out, elf_idx_t *out_pt_load_idx
 )
 {
-    *out = (struct elf_dt_gnu_hash) { 0 };
-    out->shdr = ELF_IDX_NULL;
-    out->dyn_entry = ELF_IDX_NULL;
+    *out = empty_gnu_hash_st;
     *out_pt_load_idx = ELF_IDX_NULL;
 
     /* Find the DT_GNU_HASH vaddr, file offset and containing PT_LOAD */
@@ -2404,9 +2378,7 @@ static int parse_dyn_symtab_shndx_if_exists(
         struct elf_dyn_symtab_shndx *out
 )
 {
-    *out = (struct elf_dyn_symtab_shndx) { 0 };
-    out->dyn_entry = ELF_IDX_NULL;
-    out->shdr = ELF_IDX_NULL;
+    *out = empty_symtab_shndx_st;
 
     Elf64_Off off = 0;
     Elf64_Addr vaddr = 0;

@@ -483,7 +483,7 @@ int main(int argc, char **argv)
     }
 
     /** Parse the ELF **/
-    struct elf elf = { 0 };
+    struct elf elf = empty_elf_ctx_st;
     {
         if (read_elf(argv[1], &elf)) goto err;
 

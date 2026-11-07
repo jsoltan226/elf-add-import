@@ -16,7 +16,23 @@ struct elf;
 struct elf_phdrs;
 struct elf_shdrs;
 struct elf_dyn_entries;
+
+/**
+ * @typedef Used to refer to entries in arrays of in-memory ELF structures,
+ * such as the program and section headers and the dynamic entries.
+ *
+ * Note: Shrinking or inserting an element into an array invalidates
+ * the corresponding `elf_idx_t` references. This is not an issue now as
+ * currently any modifications done only append elements or
+ * modify them in-place, but it is something worth keeping in mind.
+ */
 typedef Elf64_Xword elf_idx_t;
+
+/**
+ * @define
+ * Sentinel value for `elf_idx_t` which indicates that an index is invalid.
+ */
+#define ELF_IDX_NULL ((Elf64_Xword)-1)
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
 
@@ -94,6 +110,7 @@ int write_file(const char *path, const uint8_t *buf, uint64_t size);
  *
  * @return 0 on success, non-zero in case of integer overflow.
  */
+__attribute__((unused))
 static inline int reserve_range(Elf64_Off *off_p,
                                 Elf64_Xword size, Elf64_Off *out)
 {
@@ -123,6 +140,7 @@ static inline bool is_pow2(uint64_t x) {
  *
  * @return The aligned value.
  */
+__attribute__((unused))
 static inline uint64_t align_pow2(uint64_t x, uint64_t n) {
     if (!is_pow2(n)) {
         pr_error("%s: Target value (%" PRIu64 ") is not a power of two\n",
@@ -144,6 +162,7 @@ static inline uint64_t align_pow2(uint64_t x, uint64_t n) {
  * Checks whether two ranges intersect at any point.
  * This function doesn't work for zero-sized ranges.
  */
+__attribute__((unused))
 static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
                                   uint64_t start2, uint64_t size2)
 {
@@ -472,6 +491,7 @@ int find_unique_dyn_entries(
  *  1 if the requested DT_* entry is not present,
  *  -1 in case of any other error.
  */
+__attribute__((unused))
 static inline int find_unique_dyn_entry(const struct elf_dyn_entries *entries,
                                         const Elf64_Sxword tag, elf_idx_t *out)
 {
@@ -613,6 +633,7 @@ elf_idx_t find_unique_shdr_by_type(const struct elf_shdrs *shdrs,
  *
  * @return The hash of `name`.
  */
+__attribute__((unused))
 static inline Elf32_Word sysv_hash(const uint8_t *name)
 {
     Elf32_Word h = 0;
@@ -637,6 +658,7 @@ static inline Elf32_Word sysv_hash(const uint8_t *name)
  *
  * @return The hash of `name`.
  */
+__attribute__((unused))
 static inline Elf32_Word gnu_hash(const uint8_t *name)
 {
     Elf32_Word h = 5381;
@@ -648,5 +670,17 @@ static inline Elf32_Word gnu_hash(const uint8_t *name)
 
     return h;
 }
+
+/**
+ * The ELF file data structure
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const ElfFileData empty_elf_file_data_st = {
+    .size = 0,
+    .buf = NULL,
+    .clazz = ELFCLASSNONE,
+    .encoding = ELFDATANONE
+};
 
 #endif /* UTIL_H_ */

@@ -387,6 +387,25 @@ typedef struct
 #define EV_CURRENT	1		/* Current version */
 #define EV_NUM		2
 
+/**
+ * The Elf64_Ehdr struct initialized to semantically empty (zero) values.
+ * Functionally equivalent to `(Elf64_Ehdr) { 0 }`.
+ */
+__attribute__((unused))
+static const Elf64_Ehdr empty_elf64_ehdr_st = {
+    .e_ident = { 0 },
+    .e_type = ET_NONE,
+    .e_machine = EM_NONE,
+    .e_version = EV_NONE,
+    .e_entry = 0,
+    .e_phoff = 0, .e_shoff = 0,
+    .e_flags = 0,
+    .e_ehsize = 0,
+    .e_phentsize = 0, .e_phnum = 0,
+    .e_shentsize = 0, .e_shnum = 0,
+    .e_shstrndx = 0
+};
+
 /* Section header.  */
 
 typedef struct

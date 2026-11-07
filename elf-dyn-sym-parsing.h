@@ -463,4 +463,79 @@ int parse_dynsym(
     struct elf_dyn_symtab_shndx *out_symtab_shndx, struct elf_dyn_symtab *out
 );
 
+/**
+ * The `elf_dt_hash_hdr` struct initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_dt_hash_hdr) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_dt_hash_hdr empty_hash_hdr_st = {
+    .nbucket = 0, .nchain = 0
+};
+
+/** The `elf_dt_hash` struct initialized to semantically empty (NULL) values. */
+__attribute__((unused))
+static const struct elf_dt_hash empty_hash_st = {
+    .present = false,
+    .vaddr = 0, .off = 0, .total_size = 0,
+    .dyn_entry = ELF_IDX_NULL,
+    .hdr = empty_hash_hdr_st,
+    .buckets = NULL,
+    .chain = NULL,
+    .shdr = ELF_IDX_NULL,
+};
+
+/**
+ * The `elf_dt_gnu_hash_hdr` struct
+ * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(struct elf_dt_gnu_hash_hdr) { 0 }`.
+ */
+__attribute__((unused))
+static const struct elf_dt_gnu_hash_hdr empty_gnu_hash_hdr_st = {
+    .nbuckets = 0, .symoffset = 0,
+    .bloom_size = 0, .bloom_shift = 0
+};
+
+/**
+ * The `elf_dt_gnu_hash` struct initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_dt_gnu_hash empty_gnu_hash_st = {
+    .present = false,
+    .is_canonically_empty = false, .sym_count_ambiguous = false,
+    .vaddr = 0, .off = 0,
+    .dyn_entry = ELF_IDX_NULL,
+    .hdr = empty_gnu_hash_hdr_st,
+    .bloomentsize = 0,
+    .bloom = NULL, .chain = NULL,
+    .nchain = 0, .total_size = 0,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
+ * The `elf_dyn_symtab` struct
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_symtab empty_symtab_st = {
+    .vaddr = 0, .off = 0, .size = 0, .entsize = 0,
+    .dt_symtab = ELF_IDX_NULL, .dt_syment = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL,
+    .nsyms = 0,
+    .syms = NULL,
+    .dirty = false
+};
+
+/**
+ * The `elf_dyn_symtab_shndx` struct
+ * initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_dyn_symtab_shndx empty_symtab_shndx_st = {
+    .present = false,
+    .shdr = ELF_IDX_NULL,
+    .dyn_entry = ELF_IDX_NULL,
+    .vaddr = 0, .off = 0, .size = 0,
+    .arr = NULL
+};
+
 #endif /* ELF_DYN_SYM_PARSING_H_ */

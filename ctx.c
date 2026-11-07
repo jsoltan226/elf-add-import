@@ -111,5 +111,5 @@ void destroy_elf(struct elf *elf)
 
 #undef free_if_null
 
-    *elf = (struct elf) { 0 };
+    *elf = empty_elf_ctx_st;
 }

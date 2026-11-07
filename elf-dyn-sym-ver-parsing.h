@@ -1,8 +1,13 @@
 #ifndef ELF_DYN_SYM_VER_PARSING_H_
 #define ELF_DYN_SYM_VER_PARSING_H_
 
-#include "ctx.h"
 #include "util.h"
+
+struct elf_phdrs;
+struct elf_shdrs;
+struct elf_dyn_strtab;
+struct elf_dyn_symtab;
+struct elf_dyn_entries;
 
 /** @struct In-memory representation of dynamic symbol version information. */
 struct elf_dyn_sym_ver {
@@ -165,7 +170,7 @@ struct elf_dyn_sym_ver {
 
         /**
          * Number of versym entries; equal to the number of dynamic symbols
-         * (`nsyms`).
+         * (`symtab.nsyms`).
          */
         Elf64_Xword num;
 

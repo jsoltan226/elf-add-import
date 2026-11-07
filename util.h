@@ -360,7 +360,7 @@ int stack_peek(const struct stack *st, void *out);
  *
  * @param[in,out] st The initialized stack struct to poke at. Must not be NULL.
  *
- * @param[in] value Pointer to the value (of size `st->item_size`) to push.
+ * @param[in] value Pointer to the value (of size `st->item_size`) to write.
  *  Must not be NULL, and must not point into `st`'s backing storage.
  *
  * @return 0 on success, non-zero on failure.

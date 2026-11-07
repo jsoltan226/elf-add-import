@@ -980,6 +980,67 @@ static int parse_versym(
 );
 
 /**
+ * Reads the `DT_VERSYM` entries and validates them against
+ * the previously populated `ctx->seen_vndx_bitmap`.
+ * Part of `parse_versym`.
+ *
+ * The function checks that every entry which is an effective "version index"
+ * (see the typedef for `verndx_bitmap_t`), references some version
+ * definition or dependency by ensuring that the bit corresponding to
+ * the entry's value is set in `ctx->seen_vndx_bitmap`.
+ *
+ * @param[in] data The ELF file data to read from. Must not be NULL.
+ *
+ * @param[in] ctx The version parsing context with a populated
+ *  `seen_vndx_bitmap`. Must not be NULL.
+ *
+ * @param[in] num The number of entries in the versym array;
+ *  the count of dynamic symbols in the dynamic symbol table.
+ *
+ * @param[in] tbl_off The file offset at which the Versym table starts.
+ *
+ * @param[out] out Output pointer for the new parsed array of
+ * `num` versym (Elf64_Half) entries. Must not be NULL.
+ *  On failure, NULL is written here and all allocated resources are freed.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int read_validate_versym_words(
+        const ElfFileData *data, const struct ver_parsing_ctx *ctx,
+        size_t num, Elf64_Off tbl_off, Elf64_Half **out
+);
+
+/**
+ * Tries to find a `SHT_GNU_versym` section header and validates it if present.
+ * Part of `parse_versym`.
+ *
+ * @param[in] shdrs The parsed section headers array. Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx Index (into `shdrs`) of the dynamic symbol table
+ *  (".dynsym") section, or `ELF_IDX_NULL` if not present.
+ *
+ * @param[in] vaddr Expected virtual address of the section;
+ *  the value of the `DT_VERSYM` dynamic entry.
+ *
+ * @param[in] off Expected file offset of the section.
+ *
+ * @param[in] num The number of versym entries;
+ *  equal to the number of dynamic symbols.
+ *
+ * @param[out] out Output pointer for the index (into `shdrs`) of the found
+ *  section header, or for `ELF_IDX_NULL` if invalid or not present.
+ *  Must not be NULL.
+ *
+ * @return 0 on success (nothing is found OR a valid section header is found),
+ *  non-zero on failure (an invalid section header is found).
+ */
+static int validate_sht_gnu_versym_if_exists(
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword num,
+        elf_idx_t *out
+);
+
+/**
  * The verdef `elf_dyn_sym_ver_def` struct
  * initialized to semantically empty values.
  */
@@ -2624,7 +2685,9 @@ static int parse_versym(
 
     *out = empty_versym_st;
 
-    if (symtab->nsyms > UINT64_MAX / sizeof(Elf64_Half)) {
+    if (symtab->nsyms > UINT64_MAX / sizeof(Elf64_Half) ||
+        symtab->nsyms > SIZE_MAX)
+    {
         pr_error("Number of versyms too large (integer overflow)\n");
         goto err;
     }
@@ -2634,65 +2697,18 @@ static int parse_versym(
         goto err;
     }
 
-    arr = calloc((size_t)symtab->nsyms, sizeof(Elf64_Half));
-    if (arr == NULL) {
-        pr_error("Failed to allocate the versyms array\n");
+    if (read_validate_versym_words(data, ctx, (size_t)symtab->nsyms, tbl_off,
+                                   &arr))
+    {
+        pr_error("Failed to read the versym array\n");
         goto err;
     }
 
+    if (validate_sht_gnu_versym_if_exists(shdrs, symtab->shdr, vaddr, tbl_off,
+                                          symtab->nsyms, &sht_gnu_versym_idx))
     {
-        Elf64_Off off = tbl_off;
-        for (Elf64_Xword i = 0; i < symtab->nsyms; i++) {
-            Elf64_Half val = 0;
-            if (read_Half(data, &off, &val)) {
-                pr_error("Failed to read versym entry no %" PRIu64 "\n", i);
-                goto err;
-            }
-
-            /* Valid, reserved values with no additional semantics;
-             * skip the rest of the checks */
-            if (val == VER_NDX_LOCAL || val == VER_NDX_GLOBAL)
-                continue;
-
-            /* Check that this vndx is taken in the bitmap,
-             * i.e. some version definition or dependency has it */
-            if (!check_version_index(ctx->seen_vndx_bitmap, val)) {
-                const Elf64_Half real_vndx = val & UINT16_C(0x7fff);
-                const bool hidden = !!(val & UINT16_C(0x8000));
-                pr_error("Versym entry no %" PRIu64 "'s value "
-                         "(vndx: %" PRIu16 "; hidden: %d) doesn't reference "
-                         "any version definition or dependency\n",
-                         i, real_vndx, hidden);
-                goto err;
-            }
-
-            arr[i] = val;
-        }
-    }
-
-    sht_gnu_versym_idx =
-        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_GNU_versym);
-    if (sht_gnu_versym_idx != ELF_IDX_NULL) {
-        const Elf64_Shdr *const shdr = &shdrs->arr[sht_gnu_versym_idx];
-
-        if (shdr->sh_addr != vaddr) {
-            pr_error("Invalid SHT_GNU_versym vaddr\n");
-            goto err;
-        }
-        if (shdr->sh_offset != tbl_off) {
-            pr_error("Invalid SHT_GNU_versym offset\n");
-            goto err;
-        }
-        if (shdr->sh_entsize != sizeof(Elf64_Half)) {
-            pr_error("Invalid SHT_GNU_versym entsize\n");
-            goto err;
-        }
-        if ((symtab->shdr == ELF_IDX_NULL && shdr->sh_link != SHN_UNDEF) ||
-            (symtab->shdr != ELF_IDX_NULL && shdr->sh_link != symtab->shdr))
-        {
-            pr_error("Invalid SHT_GNU_versym sh_link value\n");
-            goto err;
-        }
+        pr_error("Invalid SHT_GNU_versym section header\n");
+        goto err;
     }
 
     out->vaddr = vaddr;
@@ -2710,4 +2726,104 @@ err:
         arr = NULL;
     }
     return 1;
+}
+
+static int read_validate_versym_words(
+        const ElfFileData *data, const struct ver_parsing_ctx *ctx,
+        size_t num, Elf64_Off tbl_off, Elf64_Half **out
+)
+{
+    Elf64_Half *arr = NULL;
+    Elf64_Off off = tbl_off;
+
+    arr = calloc(num, sizeof(Elf64_Half));
+    if (arr == NULL) {
+        pr_error("Failed to allocate the versyms array\n");
+        goto err;
+    }
+
+    for (Elf64_Xword i = 0; i < num; i++) {
+        Elf64_Half val = 0;
+        if (read_Half(data, &off, &val)) {
+            pr_error("Failed to read versym entry no %" PRIu64 "\n", i);
+            goto err;
+        }
+
+        /* Valid, reserved values with no additional semantics;
+         * skip the rest of the checks */
+        if (val == VER_NDX_LOCAL || val == VER_NDX_GLOBAL)
+            continue;
+
+        /* Check that this vndx is taken in the bitmap,
+         * i.e. some version definition or dependency has it */
+        if (!check_version_index(ctx->seen_vndx_bitmap, val)) {
+            const Elf64_Half real_vndx = val & UINT16_C(0x7fff);
+            const bool hidden = !!(val & UINT16_C(0x8000));
+            pr_error("Versym entry no %" PRIu64 "'s value "
+                     "(vndx: %" PRIu16 "; hidden: %d) doesn't reference "
+                     "any version definition or dependency\n",
+                     i, real_vndx, hidden);
+            goto err;
+        }
+
+        arr[i] = val;
+    }
+
+    *out = arr; arr = NULL;
+    return 0;
+
+err:
+    if (arr != NULL) {
+        free(arr);
+        arr = NULL;
+    }
+    return 1;
+}
+
+static int validate_sht_gnu_versym_if_exists(
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Addr vaddr, Elf64_Off off, Elf64_Xword num,
+        elf_idx_t *out
+)
+{
+    *out = ELF_IDX_NULL;
+
+    elf_idx_t sht_gnu_versym_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_GNU_versym);
+    if (sht_gnu_versym_idx == ELF_IDX_NULL) {
+        pr_debug("No SHT_GNU_versym section\n");
+        return 0;
+    }
+
+    const Elf64_Shdr *const shdr = &shdrs->arr[sht_gnu_versym_idx];
+    int ret = 0;
+
+    if (shdr->sh_addr != vaddr) {
+        pr_error("Invalid SHT_GNU_versym vaddr\n");
+        ret = 1;
+    }
+    if (shdr->sh_offset != off) {
+        pr_error("Invalid SHT_GNU_versym file offset\n");
+        ret = 1;
+    }
+    if (shdr->sh_entsize != sizeof(Elf64_Half)) {
+        pr_error("Invalid SHT_GNU_versym entsize\n");
+        ret = 1;
+    }
+    if (shdr->sh_size % sizeof(Elf64_Half) != 0 ||
+        shdr->sh_size / sizeof(Elf64_Half) != num)
+    {
+        pr_error("Invalid SHT_GNU_versym size\n");
+        ret = 1;
+    }
+    if ((sht_dynsym_idx == ELF_IDX_NULL && shdr->sh_link != SHN_UNDEF) ||
+        (sht_dynsym_idx != ELF_IDX_NULL && shdr->sh_link != sht_dynsym_idx))
+    {
+        pr_error("Invalid SHT_GNU_versym sh_link value\n");
+        ret = 1;
+    }
+
+    if (!ret)
+        *out = sht_gnu_versym_idx;
+    return ret;
 }

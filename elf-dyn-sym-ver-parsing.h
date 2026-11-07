@@ -152,6 +152,51 @@ struct elf_dyn_sym_ver {
          */
         elf_idx_t shdr;
     } need; /**< Version dependency information. */
+
+    /**
+     * @struct In-memory representation of the versym array.
+     * It ties every dynamic symbol to a version definition or dependency,
+     * from the above `def` and `need` tables.
+     */
+    struct elf_dyn_sym_ver_sym {
+        /* No `present` flag because this structure must be present when
+         * any version info is present at all, so if the top-level `present`
+         * is set, this struct can be considered populated and valid. */
+
+        /**
+         * Number of versym entries; equal to the number of dynamic symbols
+         * (`nsyms`).
+         */
+        Elf64_Xword num;
+
+        /** The array of `num` version indices (identifiers). */
+        Elf64_Half *arr;
+
+        /** Virtual address of the versym array; the value of `DT_VERSYM`. */
+        Elf64_Addr vaddr;
+
+        /** File offset of the versym array. */
+        Elf64_Off off;
+
+        /**
+         * Total size (in bytes) of the versym array.
+         * Equal to `num * sizeof(Elf64_Half)`.
+         */
+        Elf64_Xword size;
+
+        /**
+         * Index of the `DT_VERSYM` dynamic entry, which holds
+         * the virtual address of the versym array.
+         * Its `d_un.d_ptr` is equal to `vaddr`.
+         */
+        elf_idx_t dt_versym_idx;
+
+        /**
+         * Index of the `SHT_GNU_versym` section header,
+         * or `ELF_IDX_NULL` if not present.
+         */
+        elf_idx_t shdr;
+    } sym;
 };
 
 /**
@@ -173,6 +218,8 @@ struct elf_dyn_sym_ver {
  *
  * @param[in] strtab Parsed dynamic string table (.dynstr). Must not be NULL.
  *
+ * @param[in] symtab Parsed dynamic symbol table (.dynsym). Must not be NULL.
+ *
  * @param[in] entries Parsed dynamic entries array. Must not be NULL.
  *
  * @param[in] data ELF file data. Must not be NULL.
@@ -188,6 +235,7 @@ struct elf_dyn_sym_ver {
 int parse_ver(const struct elf_phdrs *phdrs,
               const struct elf_shdrs *shdrs,
               const struct elf_dyn_strtab *strtab,
+              const struct elf_dyn_symtab *symtab,
               const struct elf_dyn_entries *entries,
               const ElfFileData *data,
               struct elf_dyn_sym_ver *out);

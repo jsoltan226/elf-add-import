@@ -257,6 +257,174 @@ int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
     return 0;
 }
 
+int stack_init(struct stack *st, size_t item_size)
+{
+    if (st == NULL || item_size == 0) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+
+    *st = (struct stack) { 0 };
+
+    if ((st->arr = calloc(STACK_MIN_CAPACITY, item_size)) == NULL) {
+        pr_error("Failed to allocate the initial stack backing storage\n");
+        /* `st->arr` is NULL and `st->initialized_` is false;
+         * safe to immediately return here */
+        return 1;
+    }
+
+    st->item_size = item_size;
+    st->capacity = STACK_MIN_CAPACITY;
+    st->size = 0;
+    st->initialized_ = true;
+    return 0;
+}
+
+void stack_destroy(struct stack *st)
+{
+    if (st == NULL || !st->initialized_)
+        return;
+
+    if (st->arr != NULL)
+        free(st->arr);
+
+    *st = (struct stack) { 0 };
+}
+
+#define stack_sanity_check(stp) do {                        \
+    assert((stp)->arr != NULL);                             \
+    assert((stp)->item_size > 0);                           \
+    assert((stp)->capacity >= STACK_MIN_CAPACITY);          \
+    assert((stp)->size <= (stp)->capacity);                 \
+    assert((stp)->capacity <= SIZE_MAX / (stp)->item_size); \
+} while (0)
+
+int stack_push(struct stack *st, const void *value)
+{
+    if (st == NULL || value == NULL || !st->initialized_) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    stack_sanity_check(st);
+
+    if (st->size == SIZE_MAX) {
+        pr_error("Too many items on the stack (integer overflow)\n");
+        goto err;
+    }
+    st->size++;
+
+    if (st->size > st->capacity) {
+        if (st->capacity > SIZE_MAX / STACK_GROWTH_FACTOR) {
+            pr_error("New stack capacity too large (integer overflow)\n");
+            goto err;
+        }
+        const size_t new_cap = st->capacity * STACK_GROWTH_FACTOR;
+
+        if ((st->arr = safe_realloc(&st->arr, new_cap, st->item_size)) == NULL)
+        {
+            pr_error("Failed to grow (realloc) the stack\n");
+            goto err;
+        }
+        st->capacity = new_cap;
+    }
+
+    memcpy((unsigned char *)st->arr + (st->item_size * (st->size - 1)),
+            value, st->item_size);
+    return 0;
+
+err:
+    stack_destroy(st);
+    return 1;
+}
+
+int stack_pop(struct stack *st, void *out)
+{
+    if (st == NULL || !st->initialized_) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    stack_sanity_check(st);
+
+    if (st->size == 0) {
+        pr_debug("%s: Empty stack (item_size: %zu); cannot pop\n",
+                 __func__, st->item_size);
+        return 1;
+    }
+    st->size--;
+
+    {
+        void *const old_item_p =
+            (unsigned char *)st->arr + (st->item_size * st->size);
+
+        if (out != NULL)
+            memcpy(out, old_item_p, st->item_size);
+
+        memset(old_item_p, 0, st->item_size);
+    }
+
+    if ((st->capacity - st->size) / STACK_GROWTH_FACTOR > st->size &&
+        st->capacity > STACK_MIN_CAPACITY)
+    {
+        size_t new_cap = st->capacity / STACK_GROWTH_FACTOR;
+        if (new_cap < STACK_MIN_CAPACITY)
+            new_cap = STACK_MIN_CAPACITY;
+
+        if ((st->arr = safe_realloc(&st->arr, new_cap, st->item_size)) == NULL)
+        {
+            pr_error("Failed to shrink (realloc) the stack\n");
+            stack_destroy(st);
+            return -1;
+        }
+        st->capacity = new_cap;
+    }
+
+    return 0;
+}
+
+int stack_peek(const struct stack *st, void *out)
+{
+    if (st == NULL || !st->initialized_) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    stack_sanity_check(st);
+
+    if (st->size == 0) {
+        pr_debug("%s: Empty stack (item_size: %zu); cannot peek\n",
+                __func__, st->item_size);
+        return 1;
+    }
+
+    const void *const top_item_p = (const unsigned char *)st->arr +
+        (st->item_size * (st->size - 1));
+    if (out != NULL)
+        memcpy(out, top_item_p, st->item_size);
+
+    return 0;
+}
+
+int stack_poke(struct stack *st, const void *value)
+{
+    if (st == NULL || value == NULL || !st->initialized_) {
+        pr_error("%s: Invalid parameters\n", __func__);
+        return -1;
+    }
+    stack_sanity_check(st);
+
+    if (st->size == 0) {
+        pr_debug("%s: Empty stack (item_size: %zu); cannot peek\n",
+                __func__, st->item_size);
+        return 1;
+    }
+
+    void *const top_item_p = (unsigned char *)st->arr +
+        (st->item_size * (st->size - 1));
+    memcpy(top_item_p, value, st->item_size);
+    return 0;
+}
+
+#undef stack_sanity_check
+
 elf_idx_t
 find_containing_mem_ptload(const struct elf_phdrs *phdrs,
                            Elf64_Addr start, Elf64_Xword size)

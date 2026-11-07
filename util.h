@@ -234,6 +234,140 @@ int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
                  void **ptr_p, Elf64_Xword *out_new_file_size);
 
 /**
+ * @define Minimal capacity of a `struct stack`.
+ * Even when the reported `count` is smaller, the actual allocated `capacity`
+ * will never go below this value.
+ */
+#define STACK_MIN_CAPACITY 8
+
+/**
+ * @define The factor by which a `struct stack`'s `capacity` will be increased
+ * when a push operation would make `size` would exceed it.
+ *
+ * A stack's capacity grows geometrically to reduce the number of `realloc`s.
+ */
+#define STACK_GROWTH_FACTOR 2
+
+/**
+ * @struct A simple dynamically growing (and shrinking) stack implementation.
+ *
+ * Keep in mind that the stack does not own any resource stored on it.
+ */
+struct stack {
+    /**
+     * Size of each item, i.e. the type that the stack contains.
+     * Constant throughout the struct's lifetime.
+     */
+    size_t item_size;
+
+    /**
+     * The current allocated capacity of the stack.
+     * The size (in bytes) of `arr` is equal to this value times `item_size`.
+     * Never goes below `STACK_MIN_CAPACITY`.
+     */
+    size_t capacity;
+
+    /** The current number of items on the stack. Always <= `capacity`. */
+    size_t size;
+
+    /**
+     * The backing array of the stack.
+     * Its size in bytes is equal to `item_size * capacity`.
+     */
+    void *arr;
+
+    /**
+     * Flag indicating that the struct has been initialized;
+     * sanity check used to prevent double frees and use-after-frees.
+     */
+    bool initialized_;
+};
+
+/**
+ * Initializes a new stack structure, allocating its backing array.
+ *
+ * @param[out] st Pointer to the struct to initialize. Must not be NULL.
+ *  On success, populated with the initialized stack.
+ *  On allocation failure, left zero-initialized.
+ *
+ * @param[in] item_size Size of each item contained by the stack.
+ *  Must be greater than 0.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int stack_init(struct stack *st, size_t item_size);
+
+/**
+ * Deallocates all resources associated with a `struct stack`.
+ *
+ * Doesn't do anything if the given struct is NULL or already destroyed.
+ *
+ * @param[in,out] st Pointer to the struct to destroy.
+ */
+void stack_destroy(struct stack *st);
+
+/**
+ * Pushes a value to the `struct stack`,
+ * dynamically growing the backing storage if needed.
+ *
+ * If growth fails, the stack structure is destroyed and should be discarded.
+ *
+ * @param[in,out] st The initialized stack struct to push to. Must not be NULL.
+ *
+ * @param[in] value Pointer to the value (of size `st->item_size`) to push.
+ *  Must not be NULL, and must not point into `st`'s backing storage.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int stack_push(struct stack *st, const void *value);
+
+/**
+ * Pops the current top entry off the stack,
+ * dynamically shrinking the backing storage if appropriate.
+ *
+ * If shrinking fails, the stack structure is destroyed and should be discarded.
+ *
+ * @param[in,out] st The initialized stack struct from which to pop.
+ *  Must not be NULL.
+ *
+ * @param[out] out Optional (nullable) pointer to receive the popped value.
+ *  If non-NULL, must point to storage of at least `st->item_size` bytes
+ *  and must not point into `st`'s backing storage.
+ *
+ * @return 0 if an item was successfully popped,
+ *  a positive (> 0) value if there are no items to pop (the stack is empty),
+ *  a negative (< 0) value if an error occurs.
+ */
+int stack_pop(struct stack *st, void *out);
+
+/**
+ * Reads the value at the top of the stack without popping it.
+ *
+ * @param[in] st The initialized stack struct to peek at. Must not be NULL.
+ *
+ * @param[out] out Optional (nullable) pointer to receive the value at the top
+ *  of the stack. If non-NULL, must point to storage of at least
+ *  `st->item_size` bytes and must not point into `st`'s backing storage.
+ *
+ * @return 0 if the item was successfully read, non-zero if the stack was empty.
+ *  a positive (> 0) if the stack is empty and there's nothing to peek at,
+ *  a negative (< 0) value if an error occurs.
+ */
+int stack_peek(const struct stack *st, void *out);
+
+/**
+ * Writes to the value at the top of the stack (without growing it).
+ *
+ * @param[in,out] st The initialized stack struct to poke at. Must not be NULL.
+ *
+ * @param[in] value Pointer to the value (of size `st->item_size`) to push.
+ *  Must not be NULL, and must not point into `st`'s backing storage.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int stack_poke(struct stack *st, const void *value);
+
+/**
  * Attempts to find a PT_LOAD segment
  * that contains a given virtual address range.
  *

@@ -456,26 +456,14 @@ static int parse_dynstr(
         }
     }
 
-    /* Ensure that the string table is within a PT_LOAD segment */
-    elf_idx_t strtab_ptload_idx =
-        find_containing_mem_ptload(phdrs, strtab_addr, strtab_size);
-    if (strtab_ptload_idx == ELF_IDX_NULL) {
+    /* Ensure that the string table is within a PT_LOAD segment
+     * and deduce its file offset from it */
+    Elf64_Off strtab_off = 0;
+    if (find_ptload_and_off_from_vaddr(strtab_addr, strtab_size, phdrs,
+                                       &strtab_off, NULL))
+    {
         pr_error("Dynamic string table not within any PT_LOAD segment\n");
         return 1;
-    }
-
-    /* Deduce the strtab's file offset from the PT_LOAD segment header */
-    Elf64_Off strtab_off = 0;
-    {
-        elf_idx_t tmp_ptload_idx = ELF_IDX_NULL;
-        if (find_ptload_and_off_from_vaddr(strtab_addr, strtab_size,
-                                           phdrs, &strtab_off, &tmp_ptload_idx)
-            || tmp_ptload_idx != strtab_ptload_idx)
-        {
-            pr_error("Dynamic string table not file-backed "
-                     "by its PT_LOAD segment\n");
-            return 1;
-        }
     }
 
     /* String tables must begin and end with NUL bytes */

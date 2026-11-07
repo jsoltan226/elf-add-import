@@ -5,6 +5,7 @@
 #include "elf-types.h"
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stddef.h>
@@ -139,6 +140,7 @@ strtab_strptr(const struct ver_parsing_ctx *ctx, Elf64_Off off)
 
 /**
  * Helper for setting a bit in the `seen_bits` bitmap.
+ * See the typedef for `verndx_bitmap_t` for more info.
  *
  * @param[in,out] seen_bits The bitmap in which to test/set a bit.
  *
@@ -162,6 +164,29 @@ claim_version_index(verndx_bitmap_t seen_bits, Elf64_Half vndx_val)
 
     seen_bits[wordidx] |= mask;
     return false;
+}
+
+/**
+ * Helper for testing whether a bit is set in the `seen_bits` bitmap.
+ * See the typedef for `verndx_bitmap_t` for more info.
+ *
+ * @param[in] seen_bits The bitmap in which to test the bit.
+ *
+ * @param[in] vndx_val The index of the bit to test.
+ *
+ * @return `true` if the bit is set, `false` if not.
+ */
+static inline bool
+check_version_index(const verndx_bitmap_t seen_bits, Elf64_Half vndx_val)
+{
+    /* The highest bit is a "hidden" flag */
+    const Elf64_Half real_vndx = vndx_val & UINT16_C(0x7fff);
+
+    const size_t wordidx = real_vndx / WORD_BITS;
+    const size_t bitidx = real_vndx % WORD_BITS;
+    const size_t mask = (size_t)1 << bitidx;
+
+    return !!(seen_bits[wordidx] & mask);
 }
 
 /**
@@ -362,16 +387,12 @@ static int read_validate_verdef_entry(
  *  Must not be NULL. Only written to on success; on failure, all allocated
  *  resources are freed.
  *
- * @param[out] out_list_end Output pointer for the end offset of the last
- *  Verdaux entry in the list, i.e. the upper bound of the list.
- *  Must not be NULL.
- *
  * @return 0 on success, non-zero on failure.
  */
 static int read_verdaux_list(
         const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
-        Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
+        Elf64_Off *max_end_p, Elf64_Verdaux **out
 );
 
 /**
@@ -434,6 +455,17 @@ struct verdef_name_ref {
      * whose name this struct refers to.
      */
     size_t self_idx;
+
+    /**
+     * @enum Three color DFS state of the reference.
+     * Used to check for cycles in verdef dependency relations.
+     * See `do_verdef_dfs_cycle_check`.
+     */
+    enum verdef_dfs_state {
+        VERDEF_DFS_UNSEEN = 0,  /**< White */
+        VERDEF_DFS_VISITING,    /**< Gray */
+        VERDEF_DFS_DONE         /**< Black */
+    } dfs_state; /**< Three color DFS state, used for cycle detection. */
 };
 
 /**
@@ -502,6 +534,43 @@ static int validate_verdef_relations(
         const struct elf_dyn_sym_ver_def_ent *arr, size_t num,
         const struct ver_parsing_ctx *ctx
 );
+
+/**
+ * Checks for cycles in a Verdef's dependency graph
+ * using three-color depth-first search.
+ * Part of `validate_verdef_relations`.
+ *
+ * This function is an iterative implementation of the recursive
+ * three-color depth-first algorithm. It uses an explicit stack
+ * to simulate recursion while avoiding the risk of stack overflows.
+ *
+ * Note: This routine requires that:
+ *  - Every Verdef's name (Primary Verdaux's `vda_name`) be unique;
+ *  - Every Verdef's dependencies (Additional Verdaux entries' `vda_name`s)
+ *      resolve to some Verdef's name (Primary Verdaux's `vda_name`).
+ * It may only be run when the above conditions are met.
+ *
+ * @param[in] ctx The version information parsing context. Must not be NULL.
+ *
+ * @param[in] arr The parsed array of `num` Verdef entries
+ *  (along with their corresponding aux lists). Must not be NULL.
+ *
+ * @param[in,out] refs Array of `num` Verdef name references.
+ *  Must not be NULL. The refs' `dfs_state`s are used and modified.
+ *
+ * @param[in] num Number of Verdef entries; the size of `arr` and `refs`.
+ *
+ * @param[in,out] root Name reference of the Verdef whose dependency graph
+ *  to validate. Must not be NULL. The ref's `dfs_state` is used and modified.
+ *
+ * @return 0 on success,
+ *  positive value (>0) if a cycle is detected,
+ *  negative value (<0) if some other error occurs.
+ */
+static int do_verdef_dfs_cycle_check(const struct ver_parsing_ctx *ctx,
+                                     const struct elf_dyn_sym_ver_def_ent *arr,
+                                     struct verdef_name_ref *refs, size_t num,
+                                     struct verdef_name_ref *root);
 
 /**
  * Used to `qsort` and `bsearch` Verdaux names in `validate_verdef_relations`.
@@ -742,16 +811,12 @@ static int read_validate_verneed_entry(
  * @param[out] out Output pointer for the newly allocated array of `cnt`
  *  Vernaux entries. Must not be NULL.
  *
- * @param[out] out_list_end Output pointer for the end offset of the last
- *  Vernaux entry in the list, i.e. the upper bound of the list.
- *  Must not be NULL.
- *
  * @return 0 on success, non-zero on failure.
  */
 static int read_vernaux_list(
         struct ver_parsing_ctx *ctx, Elf64_Off seg_end,
         Elf64_Off start_off, Elf64_Half cnt, Elf64_Off *max_end_p,
-        Elf64_Vernaux **out, Elf64_Off *out_list_end
+        Elf64_Vernaux **out
 );
 
 /**
@@ -889,6 +954,32 @@ static int validate_sht_gnu_verXXX_if_exists(
 );
 
 /**
+ * Parses the DT_VERSYM array which ties the symbol table to version information
+ * in DT_VERDEF and DT_VERNEED. Part of `parse_ver`.
+ *
+ * Uses the `DT_VERSYM` entry as well as the `PT_LOAD` program headers
+ * to locate the versym array and then ensures that the references it contains
+ * are all valid (resolve to some valid version definition or dependency).
+ *
+ * Also parses the `SHT_GNU_versym` section (if it's present) and cross-checks
+ * it against the information from the phdrs and dyn entries.
+ *
+ * @param[in] phdrs Parsed program headers array. Must not be NULL.
+ *
+ * @param[in] shdrs Parsed section headers array. Must not be NULL.
+ *
+ * @param[in] entries Parsed dynamic entries array. Must not be NULL.
+ *
+ * @param[in] dt_versym_idx Valid index (into `entries`) of the DT_VERSYM entry.
+ */
+static int parse_versym(
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t dt_versym_idx,
+        const ElfFileData *data, const struct elf_dyn_symtab *symtab,
+        const struct ver_parsing_ctx *ctx, struct elf_dyn_sym_ver_sym *out
+);
+
+/**
  * The verdef `elf_dyn_sym_ver_def` struct
  * initialized to semantically empty values.
  */
@@ -914,18 +1005,31 @@ static const struct elf_dyn_sym_ver_need empty_verneed_st = {
 };
 
 /**
+ * The versym `elf_dyn_sym_ver_sym` struct
+ * initialized to semantically empty values.
+ */
+static const struct elf_dyn_sym_ver_sym empty_versym_st = {
+    .num = 0, .arr = NULL,
+    .vaddr = 0, .off = 0, .size = 0,
+    .dt_versym_idx = ELF_IDX_NULL,
+    .shdr = ELF_IDX_NULL
+};
+
+/**
  * The top-level `elf_dyn_sym_ver` struct
  * initialized to semantically empty values.
  */
 static const struct elf_dyn_sym_ver empty_ver_st = {
     .present = false,
     .def = empty_verdef_st,
-    .need = empty_verneed_st
+    .need = empty_verneed_st,
+    .sym = empty_versym_st
 };
 
 int parse_ver(const struct elf_phdrs *phdrs,
               const struct elf_shdrs *shdrs,
               const struct elf_dyn_strtab *strtab,
+              const struct elf_dyn_symtab *symtab,
               const struct elf_dyn_entries *entries,
               const ElfFileData *data,
               struct elf_dyn_sym_ver *out)
@@ -975,6 +1079,14 @@ int parse_ver(const struct elf_phdrs *phdrs,
         goto err;
     }
 
+    /* Parse the versym array, validating it against VERDEF/VERNEED */
+    if (parse_versym(phdrs, shdrs, entries, dt_versym_idx, data, symtab,
+                     &ver_parsing_ctx, &ver.sym))
+    {
+        pr_error("Failed to parse the symbol version index (versym) array\n");
+        goto err;
+    }
+
     ver.present = true;
 
 err:
@@ -999,6 +1111,10 @@ err:
         }
         free(ver.need.arr);
         ver.need.arr = NULL;
+    }
+    if (ver.sym.arr != NULL) {
+        free(ver.sym.arr);
+        ver.sym.arr = NULL;
     }
     ver = empty_ver_st;
     return -1;
@@ -1266,7 +1382,6 @@ static int read_validate_verdef_entry(
     Elf64_Verdef vd = { 0 };
     Elf64_Verdaux *aux_list = NULL;
     Elf64_Off aux_list_off = 0;
-    Elf64_Xword aux_list_size = 0;
 
     *out = (struct elf_dyn_sym_ver_def_ent) { 0 };
 
@@ -1328,7 +1443,6 @@ static int read_validate_verdef_entry(
     /* `vd.vd_aux`, `vd.vd_cnt`, `vd.vd_hash` */
     aux_list = NULL;
     aux_list_off = 0;
-    aux_list_size = 0;
     {
         if (vd.vd_cnt == 0) {
             pr_error("Number of auxiliary entries is 0\n");
@@ -1338,25 +1452,19 @@ static int read_validate_verdef_entry(
         if (vd.vd_aux < VERDEF_ENTSIZE) {
             pr_error("Start of auxiliary array inside of verdef entry\n");
             goto err;
-        } else if (vd.vd_aux > seg_end - *off_p) {
+        } else if (*off_p > seg_end || vd.vd_aux > seg_end - *off_p) {
             pr_error("Auxiliary array offset overflows load segment\n");
             goto err;
         }
         aux_list_off = *off_p + vd.vd_aux;
 
         /* also validates `vd_hash` */
-        Elf64_Off aux_list_end = 0;
         if (read_verdaux_list(ctx, vd.vd_hash, seg_end, aux_list_off,
-                              vd.vd_cnt, max_end_p, &aux_list, &aux_list_end))
+                              vd.vd_cnt, max_end_p, &aux_list))
         {
             pr_error("Failed to read auxiliary information entry list\n");
             goto err;
-        } else if (aux_list_end <= aux_list_off) {
-            /* `ranges_overlap` requires `size` to be > 0, so use `<=` */
-            pr_error("Auxiliary list has invalid size (impossible outcome)\n");
-            goto err;
         }
-        aux_list_size = aux_list_end - aux_list_off;
     }
 
     /* `vd.vd_next` */
@@ -1377,15 +1485,8 @@ static int read_validate_verdef_entry(
                 goto err;
             }
 
-            if (vd.vd_next > seg_end - *off_p) {
+            if (*off_p > seg_end || vd.vd_next > seg_end - *off_p) {
                 pr_error("Next verdef entry offset overflows load segment\n");
-                goto err;
-            }
-            const Elf64_Off next_off = *off_p + vd.vd_next;
-            if (ranges_overlap(next_off, VERDEF_ENTSIZE,
-                               aux_list_off, aux_list_size))
-            {
-                pr_error("Next verdef entry overlaps current one's aux list\n");
                 goto err;
             }
 
@@ -1408,14 +1509,12 @@ err:
 static int read_verdaux_list(
         const struct ver_parsing_ctx *ctx, Elf64_Word vd_hash,
         Elf64_Off seg_end, Elf64_Off start_off, Elf64_Half cnt,
-        Elf64_Off *max_end_p, Elf64_Verdaux **out, Elf64_Off *out_list_end
+        Elf64_Off *max_end_p, Elf64_Verdaux **out
 )
 {
     *out = NULL;
-    *out_list_end = 0;
     Elf64_Off off = 0;
     Elf64_Verdaux *arr = NULL;
-    Elf64_Off list_end = 0;
 
     assert(seg_end >= VERDAUX_ENTSIZE);
     assert(cnt > 0);
@@ -1447,14 +1546,9 @@ static int read_verdaux_list(
             pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
                      (const char *)strtab_strptr(ctx, arr[i].vda_name));
         }
-
-        if (is_last)
-            /* `read_validate_verdaux_entry` safely computes this value */
-            list_end = off + VERDAUX_ENTSIZE;
     }
 
     *out = arr; arr = NULL;
-    *out_list_end = list_end;
     return 0;
 
 err:
@@ -1529,7 +1623,7 @@ static int read_validate_verdaux_entry(
                 return 1;
             }
 
-            if (out->vda_next > seg_end - *off_p) {
+            if (*off_p > seg_end || out->vda_next > seg_end - *off_p) {
                 pr_error("Next verdaux entry offset overflows load segment\n");
                 return 1;
             }
@@ -1560,7 +1654,8 @@ static int validate_verdef_relations(
         refs[i] = (struct verdef_name_ref) {
             .vd_hash = vd_hash,
             .name = (const char *)strtab_strptr(ctx, first_aux->vda_name),
-            .self_idx = i
+            .self_idx = i,
+            .dfs_state = VERDEF_DFS_UNSEEN
         };
     }
 
@@ -1609,10 +1704,29 @@ static int validate_verdef_relations(
                 pr_error("Additional verdaux entry \"%s\" doesn't resolve "
                          "to any verdef's first verdaux entry\n", vda_name);
                 ret = 1;
-            } else if (res->self_idx == curr_ref->self_idx) {
-                pr_error("Verdef \"%s\" depends on itself\n", curr_ref->name);
-                ret = 1;
             }
+        }
+    }
+
+    /* Check that the Verdef dependency graph is acyclic using
+     * three-color depth-first search. */
+
+    /* Verdef relation must be valid in order for us to be able to
+     * perform depth-first search */
+    if (ret)
+        goto out;
+    for (size_t i = 0; i < num; i++) {
+        struct verdef_name_ref *const curr_ref = &refs[i];
+        const int r = do_verdef_dfs_cycle_check(ctx, arr, refs, num,
+                                                curr_ref);
+        if (r > 0) {
+            pr_error("Verdef \"%s\" has circular dependency graph\n",
+                     curr_ref->name);
+            ret = 1;
+        } else if (r < 0) {
+            /* some other (e.g. allocation) error; already logged */
+            ret = -1;
+            goto out;
         }
     }
 
@@ -1622,6 +1736,133 @@ out:
         refs = NULL;
     }
     return ret;
+}
+
+static int do_verdef_dfs_cycle_check(const struct ver_parsing_ctx *ctx,
+                                     const struct elf_dyn_sym_ver_def_ent *arr,
+                                     struct verdef_name_ref *refs, size_t num,
+                                     struct verdef_name_ref *root)
+{
+    struct dfs_frame {
+        struct verdef_name_ref *ref;
+        Elf64_Half next_aux_idx;
+    };
+    struct stack st = { 0 };
+    bool cycle_found = false;
+
+    /* already visited this node and its whole subtree */
+    if (root->dfs_state == VERDEF_DFS_DONE)
+        return 0;
+
+    if (stack_init(&st, sizeof(struct dfs_frame))) {
+        pr_error("Failed to initialize the DFS stack\n");
+        return -1;
+    }
+
+    /* Visit the first node */
+    root->dfs_state = VERDEF_DFS_VISITING;
+    const struct dfs_frame root_frame = {
+        .ref = root,
+        .next_aux_idx = 1 /* start from the first "non-primary" aux */
+    };
+    if (stack_push(&st, &root_frame))
+        goto err;
+
+    while (st.size > 0) {
+        struct dfs_frame frame;
+        if (stack_peek(&st, &frame))
+            goto err;
+
+        struct verdef_name_ref *const parent_ref = frame.ref;
+        assert(parent_ref != NULL);
+        assert(parent_ref->self_idx < num);
+        assert(parent_ref->dfs_state == VERDEF_DFS_VISITING);
+        const struct elf_dyn_sym_ver_def_ent *const parent_ent =
+            &arr[parent_ref->self_idx];
+
+        if (frame.next_aux_idx >= parent_ent->vd.vd_cnt) {
+            /* We've visited all dependencies of this node */
+            parent_ref->dfs_state = VERDEF_DFS_DONE;
+            if (stack_pop(&st, NULL))
+                goto err;
+
+            continue;
+        }
+
+        /* We're in the process of visiting this node's subtrees;
+         * process the next one */
+
+        const Elf64_Half curr_aux_idx = frame.next_aux_idx;
+        frame.next_aux_idx++;
+        if (stack_poke(&st, &frame))
+            goto err;
+
+        /* Find the child Verdef */
+        struct verdef_name_ref *child_ref = NULL;
+        {
+            const Elf64_Verdaux *const curr_aux =
+                &parent_ent->aux_list[curr_aux_idx];
+
+            const uint8_t *const child_name =
+                strtab_strptr(ctx, curr_aux->vda_name);
+            assert(child_name != NULL);
+
+            const struct verdef_name_ref key = {
+                .name = (const char *)child_name,
+                .vd_hash = sysv_hash(child_name)
+            };
+            child_ref = bsearch(&key, refs, num, sizeof(*refs),
+                                verdef_name_ref_cmp);
+            /* Verdef relations' validity has already been established */
+            assert(child_ref != NULL);
+        }
+
+
+
+        /* this child's subtree has already been cleared;
+         * skip visiting it */
+        if (child_ref->dfs_state == VERDEF_DFS_DONE)
+            continue;
+
+        /* We are in the process of descending this child's subtree,
+         * and yet we've somehow climbed back up to it. That's a cycle! */
+        else if (child_ref->dfs_state == VERDEF_DFS_VISITING) {
+            pr_error("Verdef dependency cycle detected "
+                     "(\"%s\" -> \"%s\" -> ... -> \"%s\")\n",
+                    parent_ref->name, child_ref->name, parent_ref->name);
+            cycle_found = true;
+            continue;
+        }
+
+        else if (child_ref->dfs_state == VERDEF_DFS_UNSEEN) {
+            /* We're seeing this node for the first time;
+             * mark it visited and add it to the stack,
+             * so that on the next iteration
+             * we start descending its subtree */
+            child_ref->dfs_state = VERDEF_DFS_VISITING;
+
+            /* We're basically making this `child` a new `root`
+             * and doing a recursive call */
+            const struct dfs_frame new_subtree = {
+                .ref = child_ref,
+                .next_aux_idx = 1 /* start from the first "non-primary" aux */
+            };
+            if (stack_push(&st, &new_subtree))
+                goto err;
+        }
+
+        else {
+            pr_error("Invalid DFS state (impossible outcome)\n");
+            goto err;
+        }
+    }
+
+    stack_destroy(&st);
+    return cycle_found ? 1 : 0;
+
+err:
+    stack_destroy(&st);
+    return -1;
 }
 
 static int verdef_name_ref_cmp(const void *a_, const void *b_)
@@ -1959,7 +2200,6 @@ static int read_validate_verneed_entry(
     Elf64_Verneed vn = { 0 };
     Elf64_Vernaux *aux_list = NULL;
     Elf64_Off aux_list_off = 0;
-    Elf64_Xword aux_list_size = 0;
 
     *out = (struct elf_dyn_sym_ver_need_ent) { 0 };
 
@@ -1999,12 +2239,11 @@ static int read_validate_verneed_entry(
     /* `vn.vn_aux`, `vn.vn_cnt` */
     aux_list = NULL;
     aux_list_off = 0;
-    aux_list_size = 0;
     {
         if (vn.vn_aux < VERNEED_ENTSIZE) {
             pr_error("Start of auxiliary list inside verneed entry\n");
             goto err;
-        } else if (vn.vn_aux > seg_end - *off_p) {
+        } else if (*off_p > seg_end || vn.vn_aux > seg_end - *off_p) {
             pr_error("Start of auxiliary list outside of load segment bounds\n");
             goto err;
         }
@@ -2015,18 +2254,12 @@ static int read_validate_verneed_entry(
             goto err;
         }
 
-        Elf64_Off aux_list_end = 0;
         if (read_vernaux_list(ctx, seg_end, aux_list_off, vn.vn_cnt, max_end_p,
-                              &aux_list, &aux_list_end))
+                              &aux_list))
         {
             pr_error("Failed to read the auxiliary information entries list\n");
             goto err;
-        } else if (aux_list_end <= aux_list_off) {
-            /* `ranges_overlap` requires `size` to be > 0, so use `<=` */
-            pr_error("Auxiliary list has invalid size (impossible outcome)\n");
-            goto err;
         }
-        aux_list_size = aux_list_end - aux_list_off;
     }
 
     /* `vn.vn_next` */
@@ -2046,20 +2279,12 @@ static int read_validate_verneed_entry(
                 goto err;
             }
 
-            if (vn.vn_next > seg_end - *off_p) {
+            if (*off_p > seg_end || vn.vn_next > seg_end - *off_p) {
                 pr_error("Next vernaux entry offset overflows load segment\n");
                 goto err;
             }
-            const Elf64_Off next_off = *off_p + vn.vn_next;
-            if (ranges_overlap(next_off, VERNEED_ENTSIZE,
-                               aux_list_off, aux_list_size))
-            {
-                pr_error("Next verneed entry overlaps current one's "
-                         "aux list\n");
-                goto err;
-            }
 
-            *off_p = next_off;
+            *off_p += vn.vn_next;
         }
     }
 
@@ -2078,14 +2303,12 @@ err:
 static int read_vernaux_list(
         struct ver_parsing_ctx *ctx, Elf64_Off seg_end,
         Elf64_Off start_off, Elf64_Half cnt, Elf64_Off *max_end_p,
-        Elf64_Vernaux **out, Elf64_Off *out_list_end
+        Elf64_Vernaux **out
 )
 {
     Elf64_Off off = 0;
     Elf64_Vernaux *arr = NULL;
-    Elf64_Off list_end = 0;
     *out = NULL;
-    *out_list_end = 0;
 
     assert(seg_end >= VERNAUX_ENTSIZE);
     assert(cnt > 0);
@@ -2110,13 +2333,9 @@ static int read_vernaux_list(
 
         pr_debug("    -> aux[%" PRIu16 "]: \"%s\"\n", i,
                  (const char *)strtab_strptr(ctx, arr[i].vna_name));
-        if (is_last)
-            /* `read_validate_vernaux_entry` safely computes this value */
-            list_end = off + VERNAUX_ENTSIZE;
     }
 
     *out = arr; arr = NULL;
-    *out_list_end = list_end;
     return 0;
 
 err:
@@ -2218,7 +2437,7 @@ static int read_validate_vernaux_entry(
                 return 1;
             }
 
-            if (out->vna_next > seg_end - *off_p) {
+            if (*off_p > seg_end || out->vna_next > seg_end - *off_p) {
                 pr_error("Next vernaux entry offset overflows load segment\n");
                 return 1;
             }
@@ -2387,4 +2606,108 @@ static int validate_sht_gnu_verXXX_if_exists(
     if (!ret)
         *out = shdr_idx;
     return ret;
+}
+
+static int parse_versym(
+        const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries, elf_idx_t dt_versym_idx,
+        const ElfFileData *data, const struct elf_dyn_symtab *symtab,
+        const struct ver_parsing_ctx *ctx, struct elf_dyn_sym_ver_sym *out
+)
+{
+    const Elf64_Addr vaddr = entries->arr[dt_versym_idx].d_un.d_ptr;
+    elf_idx_t ptload = ELF_IDX_NULL;
+    Elf64_Off tbl_off = 0;
+    Elf64_Xword size = 0;
+    Elf64_Half *arr = NULL;
+    elf_idx_t sht_gnu_versym_idx = ELF_IDX_NULL;
+
+    *out = empty_versym_st;
+
+    if (symtab->nsyms > UINT64_MAX / sizeof(Elf64_Half)) {
+        pr_error("Number of versyms too large (integer overflow)\n");
+        goto err;
+    }
+    size = symtab->nsyms * sizeof(Elf64_Half);
+    if (find_ptload_and_off_from_vaddr(vaddr, size, phdrs, &tbl_off, &ptload)) {
+        pr_error("Versym array not contained in a PT_LOAD segment\n");
+        goto err;
+    }
+
+    arr = calloc((size_t)symtab->nsyms, sizeof(Elf64_Half));
+    if (arr == NULL) {
+        pr_error("Failed to allocate the versyms array\n");
+        goto err;
+    }
+
+    {
+        Elf64_Off off = tbl_off;
+        for (Elf64_Xword i = 0; i < symtab->nsyms; i++) {
+            Elf64_Half val = 0;
+            if (read_Half(data, &off, &val)) {
+                pr_error("Failed to read versym entry no %" PRIu64 "\n", i);
+                goto err;
+            }
+
+            /* Valid, reserved values with no additional semantics;
+             * skip the rest of the checks */
+            if (val == VER_NDX_LOCAL || val == VER_NDX_GLOBAL)
+                continue;
+
+            /* Check that this vndx is taken in the bitmap,
+             * i.e. some version definition or dependency has it */
+            if (!check_version_index(ctx->seen_vndx_bitmap, val)) {
+                const Elf64_Half real_vndx = val & UINT16_C(0x7fff);
+                const bool hidden = !!(val & UINT16_C(0x8000));
+                pr_error("Versym entry no %" PRIu64 "'s value "
+                         "(vndx: %" PRIu16 "; hidden: %d) doesn't reference "
+                         "any version definition or dependency\n",
+                         i, real_vndx, hidden);
+                goto err;
+            }
+
+            arr[i] = val;
+        }
+    }
+
+    sht_gnu_versym_idx =
+        find_unique_shdr_by_type(shdrs, shdr_unique_SHT_GNU_versym);
+    if (sht_gnu_versym_idx != ELF_IDX_NULL) {
+        const Elf64_Shdr *const shdr = &shdrs->arr[sht_gnu_versym_idx];
+
+        if (shdr->sh_addr != vaddr) {
+            pr_error("Invalid SHT_GNU_versym vaddr\n");
+            goto err;
+        }
+        if (shdr->sh_offset != tbl_off) {
+            pr_error("Invalid SHT_GNU_versym offset\n");
+            goto err;
+        }
+        if (shdr->sh_entsize != sizeof(Elf64_Half)) {
+            pr_error("Invalid SHT_GNU_versym entsize\n");
+            goto err;
+        }
+        if ((symtab->shdr == ELF_IDX_NULL && shdr->sh_link != SHN_UNDEF) ||
+            (symtab->shdr != ELF_IDX_NULL && shdr->sh_link != symtab->shdr))
+        {
+            pr_error("Invalid SHT_GNU_versym sh_link value\n");
+            goto err;
+        }
+    }
+
+    out->vaddr = vaddr;
+    out->dt_versym_idx = dt_versym_idx;
+    out->off = tbl_off;
+    out->size = size;
+    out->num = symtab->nsyms;
+    out->arr = arr; arr = NULL;
+    out->shdr = sht_gnu_versym_idx;
+    return 0;
+
+err:
+    if (arr != NULL) {
+        free(arr);
+        arr = NULL;
+    }
+    return 1;
 }

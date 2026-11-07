@@ -1040,12 +1040,12 @@ static int validate_sht_gnu_versym_if_exists(
         elf_idx_t *out
 );
 
-int parse_ver(const struct elf_phdrs *phdrs,
+int parse_ver(const ElfFileData *data,
+              const struct elf_phdrs *phdrs,
               const struct elf_shdrs *shdrs,
+              const struct elf_dyn_entries *entries,
               const struct elf_dyn_strtab *strtab,
               const struct elf_dyn_symtab *symtab,
-              const struct elf_dyn_entries *entries,
-              const ElfFileData *data,
               struct elf_dyn_sym_ver *out)
 {
     if (out != NULL)
@@ -1102,6 +1102,8 @@ int parse_ver(const struct elf_phdrs *phdrs,
     }
 
     ver.present = true;
+    *out = ver;
+    return 0;
 
 err:
     ver_parsing_ctx = (struct ver_parsing_ctx) { 0 };

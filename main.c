@@ -492,13 +492,6 @@ int main(int argc, char **argv)
                      "of the file, it might be already patched!\n");
         }
         list_sections(&elf);
-
-        if (parse_ver(&elf.phdrs, &elf.shdrs, &elf.dyn.strtab, &elf.dyn.symtab,
-                      &elf.dyn.entries, &elf.data, NULL))
-        {
-            pr_error("parse_ver has failed\n");
-            /* goto err; */
-        }
     }
 
     /** Modify the ELF **/

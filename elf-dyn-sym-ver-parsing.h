@@ -221,17 +221,17 @@ struct elf_dyn_sym_ver {
  * even if neither `DT_VERDEF` nor `DT_VERNEED` is present.
  * However, `DT_VERDEF` and `DT_VERNEED` cannot exist without `DT_VERSYM`.
  *
+ * @param[in] data ELF file data. Must not be NULL.
+ *
  * @param[in] phdrs Parsed program headers array. Must not be NULL.
  *
  * @param[in] shdrs Parsed section headers array. Must not be NULL.
  *
+ * @param[in] entries Parsed dynamic entries array. Must not be NULL.
+ *
  * @param[in] strtab Parsed dynamic string table (.dynstr). Must not be NULL.
  *
  * @param[in] symtab Parsed dynamic symbol table (.dynsym). Must not be NULL.
- *
- * @param[in] entries Parsed dynamic entries array. Must not be NULL.
- *
- * @param[in] data ELF file data. Must not be NULL.
  *
  * @param[out] out Output pointer. May be NULL, in which case
  *  the function runs normally but all allocated resources are freed
@@ -241,12 +241,12 @@ struct elf_dyn_sym_ver {
  *         1 if no version info is found,
  *         -1 if the version info is malformed or some other error occurs.
  */
-int parse_ver(const struct elf_phdrs *phdrs,
+int parse_ver(const ElfFileData *data,
+              const struct elf_phdrs *phdrs,
               const struct elf_shdrs *shdrs,
+              const struct elf_dyn_entries *entries,
               const struct elf_dyn_strtab *strtab,
               const struct elf_dyn_symtab *symtab,
-              const struct elf_dyn_entries *entries,
-              const ElfFileData *data,
               struct elf_dyn_sym_ver *out);
 
 /**

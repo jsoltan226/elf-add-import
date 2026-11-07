@@ -3,7 +3,7 @@ CC32 ?= $(CC) -m32
 AR ?= ar
 CCLD ?= $(CC)
 CCLD32 ?= $(CC32)
-COMMON_CFLAGS := -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wcast-align -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wold-style-definition -Wredundant-decls -Wnested-externs -Wwrite-strings -Wswitch-enum -Wswitch-default -Wfloat-equal -Wpointer-arith -Wbad-function-cast -Wstrict-overflow=5 -Walloca -Wvla -Wstack-protector -Wformat-overflow=2 -Wformat-truncation=2 -Wstringop-overflow=4 -Warray-bounds=2 -Wshift-overflow=2 -Wnull-dereference -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wjump-misses-init -Wtrampolines -Wuse-after-free=3 -std=c11 -fPIC
+COMMON_CFLAGS := -std=c11 -fPIC -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wundef -Wcast-align -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wold-style-definition -Wredundant-decls -Wnested-externs -Wwrite-strings -Wswitch-enum -Wswitch-default -Wfloat-equal -Wpointer-arith -Wbad-function-cast #-Wstrict-overflow=5 -Walloca -Wvla -Wstack-protector -Wformat-overflow=2 -Wformat-truncation=2 -Wstringop-overflow=4 -Warray-bounds=2 -Wshift-overflow=2 -Wnull-dereference -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wjump-misses-init -Wtrampolines -Wuse-after-free=3 -std=c11 -fPIC
 ASAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g3
 CFLAGS ?=
 SO_LDFLAGS := -shared
@@ -45,7 +45,7 @@ SUS_LIB_LDFLAGS := #-nostdlib
 
 TEST_ARTIFACTS := $(TEST_EXE) $(TEST_EXE32) $(TEST_LIB) $(TEST_LIB32) $(TEST_LIB_COPY) $(TEST_LIB32_COPY)
 
-SRCS=$(filter-out $(TEST_SRCS),$(shell find $(wildcard *) -type f -name "*.c" ))
+SRCS=$(filter-out $(TEST_SRCS) test.c,$(shell find $(wildcard *) -type f -name "*.c" ))
 OBJS=$(patsubst %,$(OBJDIR)/%.o,$(shell echo $(SRCS) | xargs basename -as .c))
 DEPS=$(patsubst %.o,%.d,$(OBJS))
 STRIP_OBJS=

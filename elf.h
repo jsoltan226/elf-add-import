@@ -961,11 +961,16 @@ typedef struct
 #define DT_ENCODING	32		/* Start of encoded range */
 #define DT_PREINIT_ARRAY 32		/* Array with addresses of preinit fct*/
 #define DT_PREINIT_ARRAYSZ 33		/* size in bytes of DT_PREINIT_ARRAY */
-#define DT_SYMTAB_SHNDX	34		/* Address of SYMTAB_SHNDX section */
+#define DT_SYMTAB_SHNDX	34		/* Address of SYMTAB_SHNDX section.
+                                   A recent addition to the gABI; almost never
+                                   present in real-world binaries. */
 #define DT_RELRSZ	35		/* Total size of RELR relative relocations */
 #define DT_RELR		36		/* Address of RELR relative relocations */
 #define DT_RELRENT	37		/* Size of one RELR relative relocation */
-#define	DT_NUM		38		/* Number used */
+#define DT_SYMTABSZ 39      /* Size in bytes of the dynamic symbol table.
+                               A recent addition to the gABI; almost never
+                               present in real-world binaries. */
+#define	DT_NUM		40		/* Number used */
 #define DT_LOOS		0x6000000d	/* Start of OS-specific */
 
 /**

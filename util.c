@@ -552,13 +552,13 @@ int find_unique_dyn_entries(
 const char * section_name_strptr(const struct elf *elf, Elf64_Addr sh_name)
 {
     if (elf == NULL || elf->shdrs.arr == NULL ||
-        elf->ehdr.e_shstrndx == SHN_UNDEF ||
+        elf->shstrndx == SHN_UNDEF ||
         elf->shstrndx >= elf->shdrs.num)
     {
         return "N/A (missing or invalid shstrtab section)";
     }
 
-    const Elf64_Shdr *shstrtab = &elf->shdrs.arr[elf->ehdr.e_shstrndx];
+    const Elf64_Shdr *shstrtab = &elf->shdrs.arr[elf->shstrndx];
     if (shstrtab->sh_offset >= elf->data.size ||
         shstrtab->sh_size >= elf->data.size - shstrtab->sh_offset ||
         elf->data.buf == NULL)

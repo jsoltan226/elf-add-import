@@ -371,7 +371,7 @@ int read_validate_ehdr(const ElfFileData *data, Elf64_Ehdr *out)
     }
 
     pr_debug("Section header size: 0x%" PRIx16 "\n", out->e_shentsize);
-    if (out->e_shnum == 0) {
+    if (out->e_shnum == 0 && out->e_shoff == 0) {
         if (out->e_shentsize != 0) {
             pr_error("Invalid section header size\n");
             ret = 1;
@@ -1099,7 +1099,7 @@ static int parse_shdr_tbl_data_from_ehdr(
         Elf64_Xword *out_shnum, uint64_t *out_shsize, Elf64_Word *out_shstrndx
 )
 {
-    if (ehdr->e_shoff == 0 || ehdr->e_shentsize == 0) {
+    if (ehdr->e_shoff == 0) {
         *out_shnum = 0;
         *out_shsize = 0;
         return 0;
@@ -1117,10 +1117,12 @@ static int parse_shdr_tbl_data_from_ehdr(
      * is held in the `sh_size` member of the initial entry in the shdr table.
      */
     Elf64_Xword shnum = 0;
-    if (ehdr->e_shnum == 0)
+    if (ehdr->e_shnum == 0) {
         shnum = first_shdr.sh_size;
-    else
+        pr_debug("Real number of section headers: %" PRIu64 "\n", shnum);
+    } else {
         shnum = ehdr->e_shnum;
+    }
 
     /** From `man 5 elf`, `ELF header (Ehdr)`:
      * If the index of the .shstrtab section is >= `SHN_LORESERVE`,

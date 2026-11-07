@@ -86,11 +86,12 @@ const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx)
 
 void destroy_elf(struct elf *elf)
 {
-#define free_if_nonnull(ptr) \
-    if (ptr != NULL) {    \
-        free(ptr);        \
-        ptr = NULL;       \
-    }
+#define free_if_nonnull(ptr) do {   \
+    if (ptr != NULL) {              \
+        free(ptr);                  \
+        ptr = NULL;                 \
+    }                               \
+} while (0)
 
     free_if_nonnull(elf->data.buf);
 
@@ -108,6 +109,20 @@ void destroy_elf(struct elf *elf)
     free_if_nonnull(elf->dyn.gnu_hash.chain);
 
     free_if_nonnull(elf->dyn.symtab_shndx.arr);
+
+    if (elf->dyn.sym_ver.def.arr != NULL) {
+        for (Elf64_Half i = 0; i < elf->dyn.sym_ver.def.num; i++)
+            free_if_nonnull(elf->dyn.sym_ver.def.arr[i].aux_list);
+
+        free(elf->dyn.sym_ver.def.arr);
+    }
+    if (elf->dyn.sym_ver.need.arr != NULL) {
+        for (Elf64_Half i = 0; i < elf->dyn.sym_ver.need.num; i++)
+            free_if_nonnull(elf->dyn.sym_ver.need.arr[i].aux_list);
+
+        free(elf->dyn.sym_ver.need.arr);
+    }
+    free_if_nonnull(elf->dyn.sym_ver.sym.arr);
 
 #undef free_if_null
 

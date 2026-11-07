@@ -674,6 +674,7 @@ static inline Elf32_Word gnu_hash(const uint8_t *name)
 /**
  * The ELF file data structure
  * initialized to semantically empty (NULL) values.
+ * Functionally equivalent to just `(ElfFileData) { 0 }`.
  */
 __attribute__((unused))
 static const ElfFileData empty_elf_file_data_st = {

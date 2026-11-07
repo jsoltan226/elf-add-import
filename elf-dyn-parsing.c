@@ -1,5 +1,6 @@
 #include "elf-dyn-parsing.h"
 #include "ctx.h"
+#include "elf-dyn-sym-ver-parsing.h"
 #include "elf.h"
 #include "util.h"
 #include "elf-types.h"
@@ -93,11 +94,11 @@ static int parse_dyn_table(
  *
  * @param[in] data The ELF file data. Must not be NULL.
  *
- * @param[in] entries The array of parsed dynamic entries. Must not be NULL.
- *
  * @param[in] phdrs The program headers array. Must not be NULL.
  *
  * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] entries The array of parsed dynamic entries. Must not be NULL.
  *
  * @param[out] out Output pointer which on success, will contain all metadata
  *  relevant to `.dynstr`. See the definition of `struct elf_dyn_strtab`.
@@ -107,8 +108,9 @@ static int parse_dyn_table(
  *  non-zero on failure (missing or invalid dynamic string table).
  */
 static int parse_dynstr(
-        const ElfFileData *data, const struct elf_dyn_entries *entries,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries,
 
         struct elf_dyn_strtab *out
 );
@@ -148,10 +150,11 @@ int parse_dyn(const ElfFileData *data,
         return -1;
     }
 
-    struct elf_dynamic dyn = empty_elf_dynamic_st;
-    if (out != NULL) *out = dyn;
+    if (out != NULL) *out = empty_elf_dynamic_st;
     if (out_dynentsize != NULL) *out_dynentsize = 0;
     if (out_dynsymentsize != NULL) *out_dynsymentsize = 0;
+
+    struct elf_dynamic dyn = empty_elf_dynamic_st;
     int ret = 1;
 
     const Elf64_Half entsize = data->clazz == ELFCLASS32 ?
@@ -179,7 +182,7 @@ int parse_dyn(const ElfFileData *data,
     }
     pr_debug("Number of dynamic entries: %" PRIu64 "\n", dynnum);
 
-    if (parse_dynstr(data, &dyn.entries, phdrs, shdrs, &dyn.strtab)) {
+    if (parse_dynstr(data, phdrs, shdrs, &dyn.entries, &dyn.strtab)) {
         pr_error("Invalid or missing .dynstr dynamic string table\n");
         goto err;
     }
@@ -193,11 +196,19 @@ int parse_dyn(const ElfFileData *data,
 
     /* Parse the dynamic symbol table (.dynsym),
      * along with the named symbol lookup table(s) `DT(GNU_)HASH` */
-    if (parse_dynsym(data,
-                     phdrs, shdrs, &dyn.entries, &dyn.strtab,
+    if (parse_dynsym(data, phdrs, shdrs, &dyn.entries, &dyn.strtab,
                      &dyn.hash, &dyn.gnu_hash, &dyn.symtab_shndx, &dyn.symtab))
     {
         pr_error("Failed to parse the dynamic symbol table and related data\n");
+        goto err;
+    }
+
+    /* Parse the dynamic symbol version information (.gnu.version*),
+     * if present */
+    if (parse_ver(data, phdrs, shdrs, &dyn.entries, &dyn.strtab, &dyn.symtab,
+                  &dyn.sym_ver) < 0)
+    {
+        pr_error("Failed to parse the dynamic symbol version information\n");
         goto err;
     }
 
@@ -225,6 +236,23 @@ err:
 
         if (dyn.symtab.syms != NULL)
             free(dyn.symtab.syms);
+
+        if (dyn.sym_ver.def.arr != NULL) {
+            for (Elf64_Half i = 0; i < dyn.sym_ver.def.num; i++) {
+                if (dyn.sym_ver.def.arr[i].aux_list != NULL)
+                    free(dyn.sym_ver.def.arr[i].aux_list);
+            }
+            free(dyn.sym_ver.def.arr);
+        }
+        if (dyn.sym_ver.need.arr != NULL) {
+            for (Elf64_Half i = 0; i < dyn.sym_ver.need.num; i++) {
+                if (dyn.sym_ver.need.arr[i].aux_list != NULL)
+                    free(dyn.sym_ver.need.arr[i].aux_list);
+            }
+            free(dyn.sym_ver.need.arr);
+        }
+        if (dyn.sym_ver.sym.arr != NULL)
+            free(dyn.sym_ver.sym.arr);
     } else if (!ret && out != NULL) {
         *out = dyn;
     }
@@ -420,8 +448,9 @@ err:
 }
 
 static int parse_dynstr(
-        const ElfFileData *data, const struct elf_dyn_entries *entries,
+        const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
+        const struct elf_dyn_entries *entries,
 
         struct elf_dyn_strtab *out
 )
@@ -490,8 +519,8 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
     *out = ELF_IDX_NULL;
     elf_idx_t idx = ELF_IDX_NULL;
 
-
-    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
+    /* Skip the first reserved section header */
+    for (Elf64_Xword i = 1; i < shdrs->num; i++) {
         const Elf64_Shdr *const curr = &shdrs->arr[i];
 
         const bool vaddr_overlap = curr->sh_flags & SHF_ALLOC &&

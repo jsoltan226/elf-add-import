@@ -448,6 +448,33 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
                                            elf_idx_t *out_sht_gnu_hash_idx);
 
 /**
+ * Attempts to infer the count of dynamic symbols from any available source
+ * (other than the dynamic hash tables and their respective shdrs).
+ *
+ * For now, the following is attempted:
+ *  - The `SHT_DYNSYM` (".dynsym") section header's `sh_size`
+ *  - The `SHT_GNU_versym` (".gnu.version") section header's `sh_size`.
+ *
+ * @param[in] shdrs The section headers array. Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx The index (into `shdrs`) of the `SHT_DYNSYM`
+ *  section header, or `ELF_IDX_NULL` if not present.
+ *
+ * @param[in] symentsize Size of a single dynamic symbol struct;
+ *  the value of `DT_SYMENT`.
+ *
+ * @param[out] out Output pointer for the found count of dynamic symbols.
+ *  Must not be NULL.
+ *
+ * @return 0 on success (something was found),
+ *  non-zero if the count of dynamic symbols couldn't be determined.
+ */
+static int try_to_find_alternative_nsyms_source(
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Half symentsize, Elf64_Xword *out
+);
+
+/**
  * Reads and performs basic validation of the dynamic symbol table (.dynsym).
  * Part of `parse_dynsym`.
  *
@@ -814,19 +841,12 @@ int parse_dynsym(
     }
     if (nsyms == 0) {
         /* The total number of dynamic symbols couldn't be inferred
-         * from the hash tables' . Will try whatever we can. */
-        symtab_size = 0;
-
-        /* Try SHT_DYNSYM section header, if it exists */
-        if (sht_dynsym_idx != ELF_IDX_NULL) {
-            nsyms = shdrs->arr[sht_dynsym_idx].sh_size / symentsize;
-            pr_error("WARNING: Symbol count (%" PRIu64 ") inferred from "
-                     "the SHT_DYNSYM section header\n", nsyms);
-        } else {
-            pr_error("No SHT_DYNSYM section header which could help us "
-                     "calculate the number of dynamic symbols\n");
-            pr_error("For now there's nothing we can do :(\n");
-            return -1;
+         * from the hash tables. Will try whatever we can. */
+        if (try_to_find_alternative_nsyms_source(shdrs,
+                    sht_dynsym_idx, symentsize, &nsyms))
+        {
+            pr_error("Couldn't determine the count of dynamic symbols\n");
+            goto err;
         }
     }
 
@@ -1864,6 +1884,54 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
     if (!ret)
         *out_sht_gnu_hash_idx = sht_gnu_hash_idx;
     return ret;
+}
+
+static int try_to_find_alternative_nsyms_source(
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Half symentsize, Elf64_Xword *out
+)
+{
+    Elf64_Xword nsyms = 0;
+    const char *nsyms_source_name = "n/a";
+    elf_idx_t sht_gnu_versym_idx = ELF_IDX_NULL;
+
+    /* Try SHT_DYNSYM section header, if it exists */
+    if (sht_dynsym_idx != ELF_IDX_NULL) {
+        const Elf64_Shdr *const sht_dynsym = &shdrs->arr[sht_dynsym_idx];
+        if (sht_dynsym->sh_entsize != symentsize) {
+            pr_error("Invalid SHT_DYNSYM entsize\n");
+            return -1;
+        }
+
+        nsyms = sht_dynsym->sh_size / symentsize;
+        nsyms_source_name = "the SHT_DYNSYM section header\n";
+    }
+    /* The .gnu.version SHT_GNU_versym section also contains
+     * exactly `nsyms` entries */
+    else if ((sht_gnu_versym_idx = find_unique_shdr_by_type(shdrs,
+                    shdr_unique_SHT_GNU_versym)) != ELF_IDX_NULL)
+    {
+        const Elf64_Shdr *const sht_gnu_versym =
+            &shdrs->arr[sht_gnu_versym_idx];
+        if (sht_gnu_versym->sh_entsize != sizeof(Elf64_Half)) {
+            pr_error("Invalid SHT_GNU_versym entsize\n");
+            return -1;
+        }
+
+        nsyms = sht_gnu_versym->sh_size / sizeof(Elf64_Half);
+        nsyms_source_name = "the SHT_GNU_versym section header\n";
+        return -1;
+    } else {
+        pr_error("No SHT_DYNSYM or SHT_GNU_versym section header that could "
+                 "help us calculate the number of dynamic symbols\n");
+        pr_error("For now there's nothing we can do :(\n");
+        return 1;
+    }
+
+    pr_error("WARNING: Symbol count (%" PRIu64 ") inferred from: %s\n",
+             nsyms, nsyms_source_name);
+    *out = nsyms;
+    return 0;
 }
 
 static int read_dynamic_symbol_table(

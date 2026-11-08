@@ -1,5 +1,6 @@
 #include "ctx.h"
 #include "util.h"
+#include "elf-dyn-parsing.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -86,45 +87,15 @@ const Elf64_Dyn * get_dyn_ro(const struct elf *elf, elf_idx_t idx)
 
 void destroy_elf(struct elf *elf)
 {
-#define free_if_nonnull(ptr) do {   \
-    if (ptr != NULL) {              \
-        free(ptr);                  \
-        ptr = NULL;                 \
-    }                               \
-} while (0)
+    if (elf->data.buf != NULL)
+        free(elf->data.buf);
 
-    free_if_nonnull(elf->data.buf);
+    if (elf->phdrs.arr != NULL)
+        free(elf->phdrs.arr);
+    if (elf->shdrs.arr != NULL)
+        free(elf->shdrs.arr);
 
-    free_if_nonnull(elf->phdrs.arr);
-    free_if_nonnull(elf->shdrs.arr);
-
-    free_if_nonnull(elf->dyn.entries.arr);
-
-    free_if_nonnull(elf->dyn.symtab.syms);
-
-    free_if_nonnull(elf->dyn.hash.buckets);
-    free_if_nonnull(elf->dyn.hash.chain);
-    free_if_nonnull(elf->dyn.gnu_hash.bloom);
-    free_if_nonnull(elf->dyn.gnu_hash.buckets);
-    free_if_nonnull(elf->dyn.gnu_hash.chain);
-
-    free_if_nonnull(elf->dyn.symtab_shndx.arr);
-
-    if (elf->dyn.sym_ver.def.arr != NULL) {
-        for (Elf64_Half i = 0; i < elf->dyn.sym_ver.def.num; i++)
-            free_if_nonnull(elf->dyn.sym_ver.def.arr[i].aux_list);
-
-        free(elf->dyn.sym_ver.def.arr);
-    }
-    if (elf->dyn.sym_ver.need.arr != NULL) {
-        for (Elf64_Half i = 0; i < elf->dyn.sym_ver.need.num; i++)
-            free_if_nonnull(elf->dyn.sym_ver.need.arr[i].aux_list);
-
-        free(elf->dyn.sym_ver.need.arr);
-    }
-    free_if_nonnull(elf->dyn.sym_ver.sym.arr);
-
-#undef free_if_null
+    destroy_dyn(&elf->dyn);
 
     *elf = empty_elf_ctx_st;
 }

@@ -145,6 +145,20 @@ int parse_dyn(const ElfFileData *data,
 
 
 /**
+ * Frees all resources associated with a dynamic linking data struct.
+ *
+ * Only frees resources when their references in the struct are actually there,
+ * and if so, the references are later destroyed.
+ * Therefore, it is safe to call this function even multiple times
+ * on structs that may have already been destroyed without risking double-frees.
+ *
+ * @param[in,out] dyn The struct to destroy.
+ *  May be NULL, in which case the call is a no-op.
+ */
+void destroy_dyn(struct elf_dynamic *dyn);
+
+
+/**
  * The `elf_dyn_entries` structure
  * initialized to semantically empty (NULL) values.
  * Functionally equivalent to just `(struct elf_dyn_entries) { 0 }`.

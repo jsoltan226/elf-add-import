@@ -1102,38 +1102,49 @@ int parse_ver(const ElfFileData *data,
     }
 
     ver.present = true;
-    *out = ver;
+    if (out != NULL) {
+        *out = ver;
+        ver = empty_ver_st;
+    } else {
+        destroy_ver(&ver);
+    }
     return 0;
 
 err:
     ver_parsing_ctx = (struct ver_parsing_ctx) { 0 };
-
-    if (ver.def.arr != NULL) {
-        for (Elf64_Xword i = 0; i < ver.def.num; i++) {
-            if (ver.def.arr[i].aux_list != NULL) {
-                free(ver.def.arr[i].aux_list);
-                ver.def.arr[i].aux_list = NULL;
-            }
-        }
-        free(ver.def.arr);
-        ver.def.arr = NULL;
-    }
-    if (ver.need.arr != NULL) {
-        for (Elf64_Xword i = 0; i < ver.need.num; i++) {
-            if (ver.need.arr[i].aux_list != NULL) {
-                free(ver.need.arr[i].aux_list);
-                ver.need.arr[i].aux_list = NULL;
-            }
-        }
-        free(ver.need.arr);
-        ver.need.arr = NULL;
-    }
-    if (ver.sym.arr != NULL) {
-        free(ver.sym.arr);
-        ver.sym.arr = NULL;
-    }
-    ver = empty_ver_st;
+    destroy_ver(&ver);
     return -1;
+}
+
+void destroy_ver(struct elf_dyn_sym_ver *ver)
+{
+    if (ver == NULL)
+        return;
+
+    if (ver->def.arr != NULL) {
+        for (Elf64_Xword i = 0; i < ver->def.num; i++) {
+            if (ver->def.arr[i].aux_list != NULL) {
+                free(ver->def.arr[i].aux_list);
+                ver->def.arr[i].aux_list = NULL;
+            }
+            ver->def.arr[i].vd = (Elf64_Verdef) { 0 };
+        }
+        free(ver->def.arr);
+    }
+    if (ver->need.arr != NULL) {
+        for (Elf64_Xword i = 0; i < ver->need.num; i++) {
+            if (ver->need.arr[i].aux_list != NULL) {
+                free(ver->need.arr[i].aux_list);
+                ver->need.arr[i].aux_list = NULL;
+            }
+            ver->need.arr[i].vn = (Elf64_Verneed) { 0 };
+        }
+        free(ver->need.arr);
+    }
+    if (ver->sym.arr != NULL)
+        free(ver->sym.arr);
+
+    *ver = empty_ver_st;
 }
 
 static int find_ver_info_dyn_entries(
@@ -2296,7 +2307,7 @@ static int read_validate_verneed_entry(
             }
 
             if (*off_p > seg_end || vn.vn_next > seg_end - *off_p) {
-                pr_error("Next vernaux entry offset overflows load segment\n");
+                pr_error("Next verneed entry offset overflows load segment\n");
                 goto err;
             }
 
@@ -2444,7 +2455,7 @@ static int read_validate_vernaux_entry(
         }
         if (is_last_entry) {
             if (out->vna_next != 0) {
-                pr_error("Unterminated of vernaux entry list\n");
+                pr_error("Unterminated vernaux entry list\n");
                 return 1;
             }
         } else {
@@ -2703,6 +2714,7 @@ static int read_validate_versym_words(
             pr_error("Failed to read versym entry no %" PRIu64 "\n", i);
             goto err;
         }
+        arr[i] = val;
 
         /* Valid, reserved values with no additional semantics;
          * skip the rest of the checks */
@@ -2720,8 +2732,6 @@ static int read_validate_versym_words(
                      i, real_vndx, hidden);
             goto err;
         }
-
-        arr[i] = val;
     }
 
     *out = arr; arr = NULL;
@@ -2771,10 +2781,15 @@ static int validate_sht_gnu_versym_if_exists(
         pr_error("Invalid SHT_GNU_versym size\n");
         ret = 1;
     }
-    if ((sht_dynsym_idx == ELF_IDX_NULL && shdr->sh_link != SHN_UNDEF) ||
-        (sht_dynsym_idx != ELF_IDX_NULL && shdr->sh_link != sht_dynsym_idx))
-    {
-        pr_error("Invalid SHT_GNU_versym sh_link value\n");
+    if (sht_dynsym_idx == ELF_IDX_NULL) {
+        pr_error("SHT_GNU_versym exists without SHT_DYNSYM\n");
+        ret = 1;
+    } else if (shdr->sh_link != sht_dynsym_idx) {
+        pr_error("SHT_GNU_versym sh_link doesn't point to SHT_DYNSYM\n");
+        ret = 1;
+    }
+    if (shdr->sh_info != 0) {
+        pr_error("Invalid SHT_GNU_versym sh_info value\n");
         ret = 1;
     }
 

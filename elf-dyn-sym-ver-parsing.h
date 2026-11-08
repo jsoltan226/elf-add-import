@@ -250,6 +250,19 @@ int parse_ver(const ElfFileData *data,
               struct elf_dyn_sym_ver *out);
 
 /**
+ * Frees all resources associated with a symbol version information struct.
+ *
+ * Only frees resources when their references in the struct are actually there,
+ * and if so, the references are later destroyed.
+ * Therefore, it is safe to call this function even multiple times
+ * on structs that may have already been destroyed without risking double-frees.
+ *
+ * @param[in,out] ver The struct to destroy.
+ *  May be NULL, in which case the call is a no-op.
+ */
+void destroy_ver(struct elf_dyn_sym_ver *ver);
+
+/**
  * The verdef `elf_dyn_sym_ver_def` struct
  * initialized to semantically empty values.
  */

@@ -215,56 +215,51 @@ int parse_dyn(const ElfFileData *data,
     ret = 0;
 
 err:
-    if (ret || out == NULL) {
-        if (dyn.entries.arr != NULL)
-            free(dyn.entries.arr);
-
-        if (dyn.hash.buckets != NULL)
-            free(dyn.hash.buckets);
-        if (dyn.hash.chain != NULL)
-            free(dyn.hash.chain);
-
-        if (dyn.gnu_hash.bloom != NULL)
-            free(dyn.gnu_hash.bloom);
-        if (dyn.gnu_hash.buckets != NULL)
-            free(dyn.gnu_hash.buckets);
-        if (dyn.gnu_hash.chain != NULL)
-            free(dyn.gnu_hash.chain);
-
-        if (dyn.symtab_shndx.arr != NULL)
-            free(dyn.symtab_shndx.arr);
-
-        if (dyn.symtab.syms != NULL)
-            free(dyn.symtab.syms);
-
-        if (dyn.sym_ver.def.arr != NULL) {
-            for (Elf64_Half i = 0; i < dyn.sym_ver.def.num; i++) {
-                if (dyn.sym_ver.def.arr[i].aux_list != NULL)
-                    free(dyn.sym_ver.def.arr[i].aux_list);
-            }
-            free(dyn.sym_ver.def.arr);
-        }
-        if (dyn.sym_ver.need.arr != NULL) {
-            for (Elf64_Half i = 0; i < dyn.sym_ver.need.num; i++) {
-                if (dyn.sym_ver.need.arr[i].aux_list != NULL)
-                    free(dyn.sym_ver.need.arr[i].aux_list);
-            }
-            free(dyn.sym_ver.need.arr);
-        }
-        if (dyn.sym_ver.sym.arr != NULL)
-            free(dyn.sym_ver.sym.arr);
-    } else if (!ret && out != NULL) {
-        *out = dyn;
-    }
-
     if (!ret && out_dynentsize != NULL)
         *out_dynentsize = entsize;
     if (!ret && out_dynsymentsize != NULL)
         *out_dynsymentsize = dyn.symtab.entsize;
 
-    dyn = empty_elf_dynamic_st;
+    if (ret || out == NULL) {
+        destroy_dyn(&dyn);
+    } else if (!ret && out != NULL) {
+        *out = dyn;
+        dyn = empty_elf_dynamic_st;
+    }
+
 
     return ret;
+}
+
+void destroy_dyn(struct elf_dynamic *dyn)
+{
+    if (dyn == NULL)
+        return;
+
+    if (dyn->entries.arr != NULL)
+        free(dyn->entries.arr);
+
+    if (dyn->hash.buckets != NULL)
+        free(dyn->hash.buckets);
+    if (dyn->hash.chain != NULL)
+        free(dyn->hash.chain);
+
+    if (dyn->gnu_hash.bloom != NULL)
+        free(dyn->gnu_hash.bloom);
+    if (dyn->gnu_hash.buckets != NULL)
+        free(dyn->gnu_hash.buckets);
+    if (dyn->gnu_hash.chain != NULL)
+        free(dyn->gnu_hash.chain);
+
+    if (dyn->symtab_shndx.arr != NULL)
+        free(dyn->symtab_shndx.arr);
+
+    if (dyn->symtab.syms != NULL)
+        free(dyn->symtab.syms);
+
+    destroy_ver(&dyn->sym_ver);
+
+    *dyn = empty_elf_dynamic_st;
 }
 
 static int find_validate_pt_dynamic(const struct elf_phdrs *phdrs,

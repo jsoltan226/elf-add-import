@@ -152,6 +152,14 @@ struct mod_cfg {
                  *  - DT_NEEDED
                  */
                 Elf64_Xword str_idx;
+
+                /**
+                 * An arbitrary unsigned integer value,
+                 * directly copied to the new tag's `d_un.d_val`.
+                 * Currently used with:
+                 *  - DT_SYMTABSZ
+                 */
+                Elf64_Xword uint_val;
             } val; /**< Info about the desired value of the new entry. */
 
         } *arr; /**< Array of new DT_* entries to append. */
@@ -506,10 +514,16 @@ int main(int argc, char **argv)
                 }
             },
             .entries = {
-                .num = 1,
-                .arr = &(struct dyn_entry_cfg) {
+                .num = 1 + (elf.dyn.symtab.dt_symtabsz == ELF_IDX_NULL),
+                .arr = (struct dyn_entry_cfg[]) {
+                    (struct dyn_entry_cfg) {
                         .tag = DT_NEEDED,
                         .val.str_idx = 0
+                    },
+                    (struct dyn_entry_cfg) {
+                        .tag = DT_SYMTABSZ,
+                        .val.uint_val = elf.dyn.symtab.nsyms * elf.dynsymentsize
+                    }
                  }
             }
         };
@@ -635,6 +649,8 @@ static int validate_mod_cfg(const struct mod_cfg *cfg)
                              i, dynamic_tag_to_string(curr->tag));
                     return 1;
                 }
+                break;
+            case DT_SYMTABSZ:
                 break;
             default:
                 pr_error("Unsupported dynamic tag: %s\n",
@@ -903,6 +919,9 @@ static int prepare_dyn_entries(
                 o->d_un.d_ptr = dynstr_state->str_offsets[c->val.str_idx];
                 break;
             }
+            case DT_SYMTABSZ:
+                o->d_un.d_val = c->val.uint_val;
+                break;
             default:
                 pr_error("%s: Invalid state\n", __func__);
                 return -1;

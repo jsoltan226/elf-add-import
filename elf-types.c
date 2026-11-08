@@ -997,6 +997,7 @@ const char * dynamic_tag_to_string(Elf64_Sxword dt)
         case DT_RELRSZ: return "DT_RELRSZ";
         case DT_RELR: return "DT_RELR";
         case DT_RELRENT: return "DT_RELRENT";
+        case DT_SYMTABSZ: return "DT_SYMTABSZ";
 
         case DT_ANDROID_REL: return "DT_ANDROID_REL";
         case DT_ANDROID_RELSZ: return "DT_ANDROID_RELSZ";

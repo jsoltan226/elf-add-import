@@ -331,6 +331,16 @@ struct elf_dyn_symtab {
     elf_idx_t dt_syment;
 
     /**
+     * Index of the `DT_SYMTAB` entry (a reference into `entries`);
+     * contains the size in bytes of the dynamic symbol table.
+     *
+     * Note that this entry is a very new addition to the ELF spec,
+     * and so is not supported by basically any actual linker.
+     * This means finding it in a real binary is highly unlikely.
+     */
+    elf_idx_t dt_symtabsz;
+
+    /**
      * Index of the `SHT_DYNSYM` section header
      * (a reference into `shdrs`), or `ELF_IDX_NULL` if not present.
      */
@@ -519,6 +529,7 @@ __attribute__((unused))
 static const struct elf_dyn_symtab empty_symtab_st = {
     .vaddr = 0, .off = 0, .size = 0, .entsize = 0,
     .dt_symtab = ELF_IDX_NULL, .dt_syment = ELF_IDX_NULL,
+    .dt_symtabsz = ELF_IDX_NULL,
     .shdr = ELF_IDX_NULL,
     .nsyms = 0,
     .syms = NULL,

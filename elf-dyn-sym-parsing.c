@@ -78,6 +78,9 @@ static int find_symtab(const struct elf_dyn_entries *entries, int clazz,
  * @param[in] sht_dynsym_idx The index of a `SHT_DYNSYM` section, if it exists.
  *  Set to `ELF_IDX_NULL` otherwise.
  *
+ * @param[in] dt_symtabsz_exists Whether `DT_SYMTABSZ` exists meaning that
+ *  the hash tables are no longer the only source of the dynsym count.
+ *
  * @param[out] out_hash Output pointer for the parsed `DT_HASH` structure.
  *  If no `DT_HASH` is found, default (empty) values are written here
  *  and the `present` field is set to `false`. Must not be NULL.
@@ -99,6 +102,7 @@ static int parse_dynamic_hash_tables(
         const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        bool dt_symtabsz_exists,
 
         struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
         Elf64_Xword *out_dynsym_count
@@ -448,8 +452,45 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
                                            elf_idx_t *out_sht_gnu_hash_idx);
 
 /**
+ * Combines all available sources of information about the dynamic symbol table
+ * size, cross-checks it and computes the final values.
+ *
+ * @param[in] entries Parsed dynamic entries array. Must not be NULL.
+ *
+ * @param[in] dt_symtabsz_idx Index (into `entries`) of the `DT_SYMTABSZ` entry
+ *  or `ELF_IDX_NULL` if not present.
+ *
+ * @param[in] nsyms_from_hash_tbls The dynamic symbol count inferred from
+ *  the `DT_HASH`/`DT_GNU_HASH` data, or `0` if not enough information
+ *  was available in the tables.
+ *
+ * @param[in] symentsize The size of a single ElfXX_Sym struct;
+ *  the value of `DT_SYMENT`.
+ *
+ * @param[in] shdrs The parsed section headers array. Must not be NULL.
+ *
+ * @param[in] sht_dynsym_idx The index (into `shdrs`) of the `SHT_DYNSYM`
+ *  section header, or `ELF_IDX_NULL` if not present.
+ *
+ * @param[out] out_final_nsyms Output pointer for the final count
+ *  of dynamic symbols. Must not be NULL.
+ *
+ * @param[out] out_symtab_size Output pointer for the size
+ *  of the dynamic symbol table. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+static int compute_check_nsyms_and_symtab_size(
+        const struct elf_dyn_entries *entries, elf_idx_t dt_symtabsz_idx,
+        Elf64_Xword nsyms_from_hash_tbls, Elf64_Half symentsize,
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Xword *out_final_nsyms, Elf64_Xword *out_symtab_size
+);
+
+/**
  * Attempts to infer the count of dynamic symbols from any available source
  * (other than the dynamic hash tables and their respective shdrs).
+ * Part of `compute_check_nsyms_and_symtab_size`.
  *
  * For now, the following is attempted:
  *  - The `SHT_DYNSYM` (".dynsym") section header's `sh_size`
@@ -806,9 +847,11 @@ int parse_dynsym(
     Elf64_Addr symtab_vaddr = 0;
     Elf64_Half symentsize = 0;
     elf_idx_t dt_symtab_idx = ELF_IDX_NULL, dt_syment_idx = ELF_IDX_NULL;
+    elf_idx_t dt_symtabsz_idx = ELF_IDX_NULL;
+    bool dt_symtabsz_exists = false;
 
     elf_idx_t sht_dynsym_idx = ELF_IDX_NULL;
-    Elf64_Xword nsyms = 0;
+    Elf64_Xword nsyms_from_hashtbls = 0, nsyms = 0;
     Elf64_Off symtab_off = 0;
     Elf64_Xword symtab_size = 0;
     bool uses_symtab_shndx = false;
@@ -828,33 +871,40 @@ int parse_dynsym(
      * this value being `ELF_IDX_NULL` as well. */
     sht_dynsym_idx = find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
 
-    /* Now, since there's no way to directly get the size of the symtab,
+    /* If `DT_SYMTABSZ` somehow exists, find it */
+    {
+        const int r = find_unique_dyn_entry(entries, DT_SYMTABSZ,
+                                            &dt_symtabsz_idx);
+        if (r < 0) {
+            pr_error("Duplicate DT_SYMTABSZ entry\n");
+            goto err;
+        }
+        dt_symtabsz_exists = r == 0;
+    }
+
+    /* Now, since apart from the not-actually-supported-by-anybody
+     * `DT_SYMTABSZ` there's no way to directly get the size of the symtab,
      * we must infer it from the DT_HASH and/or DT_GNU_HASH structure(s)
      * and even then, sometimes we just can't lmao.
      * What a great spec... */
     if (parse_dynamic_hash_tables(data, phdrs, shdrs, entries,
-                                  sht_dynsym_idx, out_hash, out_gnu_hash,
-                                  &nsyms))
+                                  sht_dynsym_idx, dt_symtabsz_exists,
+                                  out_hash, out_gnu_hash, &nsyms_from_hashtbls))
     {
         pr_error("Invalid or missing dynamic hash table(s)\n");
         goto err;
     }
-    if (nsyms == 0) {
-        /* The total number of dynamic symbols couldn't be inferred
-         * from the hash tables. Will try whatever we can. */
-        if (try_to_find_alternative_nsyms_source(shdrs,
-                    sht_dynsym_idx, symentsize, &nsyms))
-        {
-            pr_error("Couldn't determine the count of dynamic symbols\n");
-            goto err;
-        }
-    }
 
-    if (nsyms > UINT64_MAX / symentsize || nsyms > SIZE_MAX) {
-        pr_error("Number of dynamic symbols too large (integer overflow)\n");
+    /** Collect all info we can about the symtab's size and cross-check it */
+    if (compute_check_nsyms_and_symtab_size(
+                entries, dt_symtabsz_idx, nsyms_from_hashtbls,
+                symentsize, shdrs, sht_dynsym_idx,
+                &nsyms, &symtab_size
+    ))
+    {
+        pr_error("Couldn't determine the size of the dynamic symbol table\n");
         goto err;
     }
-    symtab_size = nsyms * symentsize;
 
     /* Validate that the table fits in a PT_LOAD segment,
      * both in the file and in memory. This also maps the virtual address
@@ -907,6 +957,7 @@ int parse_dynsym(
     out->entsize = symentsize;
     out->dt_symtab = dt_symtab_idx;
     out->dt_syment = dt_syment_idx;
+    out->dt_symtabsz = dt_symtabsz_idx;
     out->shdr = sht_dynsym_idx;
     out->nsyms = nsyms;
     out->syms = sym_arr; sym_arr = NULL;
@@ -976,6 +1027,7 @@ static int parse_dynamic_hash_tables(
         const ElfFileData *data,
         const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
         const struct elf_dyn_entries *entries, elf_idx_t sht_dynsym_idx,
+        bool dt_symtabsz_exists,
 
         struct elf_dt_hash *out_hash, struct elf_dt_gnu_hash *out_gnu_hash,
         Elf64_Xword *out_dynsym_count
@@ -1038,10 +1090,12 @@ static int parse_dynamic_hash_tables(
         }
     } else if (sysv_hash_ret != 0 && gnu_hash_ret == 0) {
         if (out_gnu_hash->sym_count_ambiguous) {
-            pr_error("WARNING: Symbol count from DT_GNU_HASH is ambiguous "
-                     "while DT_HASH is not present; can't compute "
-                     "the count of dynamic symbols from the "
-                     "hash tables' data.\n");
+            if (!dt_symtabsz_exists) {
+                pr_error("WARNING: Symbol count from DT_GNU_HASH is ambiguous "
+                         "while neither DT_HASH nor DT_SYMTABSZ are present; "
+                         "can't compute the count of dynamic symbols "
+                         "by any reliable mechanism.\n");
+            }
             *out_dynsym_count = 0;
             return 0;
         }
@@ -1870,6 +1924,85 @@ static int validate_sht_gnu_hash_if_exists(const struct elf_dt_gnu_hash *ctx,
     if (!ret)
         *out_sht_gnu_hash_idx = sht_gnu_hash_idx;
     return ret;
+}
+
+static int compute_check_nsyms_and_symtab_size(
+        const struct elf_dyn_entries *entries, elf_idx_t dt_symtabsz_idx,
+        Elf64_Xword nsyms_from_hash_tbls, Elf64_Half symentsize,
+        const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
+        Elf64_Xword *out_final_nsyms, Elf64_Xword *out_symtab_size
+)
+{
+    if (dt_symtabsz_idx != ELF_IDX_NULL) {
+        const Elf64_Xword dt_symtabsz_val =
+            entries->arr[dt_symtabsz_idx].d_un.d_val;
+
+        if (dt_symtabsz_val % symentsize != 0) {
+            pr_error("The value of DT_SYMTABSZ is not divisible by that of "
+                     "DT_SYMENT\n");
+            return 1;
+        }
+
+        if (nsyms_from_hash_tbls != 0) {
+            /* Case 1: DT_SYMTABSZ OK; hash tables OK;
+             * check that the two match and use either one */
+            if (nsyms_from_hash_tbls != dt_symtabsz_val / symentsize) {
+                pr_error("The symbol count inferred from the hash tables "
+                         "doesn't match that from DT_SYMTABSZ\n");
+                return 1;
+            }
+
+            *out_final_nsyms = nsyms_from_hash_tbls;
+            *out_symtab_size = dt_symtabsz_val;
+            return 0;
+        } else /* if (nsyms_from_hash_tbls == 0) */ {
+            /* Case 2: DT_SYMTABSZ OK; hash tables MISSING;
+             * use DT_SYMTABSZ */
+            *out_final_nsyms = dt_symtabsz_val / symentsize;
+            *out_symtab_size = dt_symtabsz_val;
+            return 0;
+        }
+    } else /* if (dt_symtabsz_idx == NULL) */ {
+        if (nsyms_from_hash_tbls != 0) {
+            /* Case 3: DT_SYMTABSZ MISSING; hash tables OK;
+             * use hash tables */
+            if (nsyms_from_hash_tbls > UINT64_MAX / symentsize ||
+                nsyms_from_hash_tbls > SIZE_MAX)
+            {
+                pr_error("Number of dynamic symbols too large "
+                         "(integer overflow)\n");
+                return 1;
+            }
+
+            *out_final_nsyms = nsyms_from_hash_tbls;
+            *out_symtab_size = nsyms_from_hash_tbls * symentsize;
+            return 0;
+        } else /* if (nsyms_from_hash_tbls == 0) */ {
+            /* Case 4: DT_SYMTABSZ MISSING; hash tables MISSING;
+             * The total number of dynamic symbols couldn't be inferred
+             * in any standard, reliable way. Will try whatever we can. */
+            Elf64_Xword nsyms_from_other_srcs = 0;
+            if (try_to_find_alternative_nsyms_source(shdrs,
+                        sht_dynsym_idx, symentsize, &nsyms_from_other_srcs))
+            {
+                pr_error("Couldn't infer the count of dynamic symbols "
+                         "from any alternative source\n");
+                return 1;
+            }
+
+            if (nsyms_from_other_srcs > UINT64_MAX / symentsize ||
+                nsyms_from_other_srcs > SIZE_MAX)
+            {
+                pr_error("Number of dynamic symbols too large "
+                         "(integer overflow)\n");
+                return 1;
+            }
+
+            *out_final_nsyms = nsyms_from_other_srcs;
+            *out_symtab_size = nsyms_from_other_srcs * symentsize;
+            return 0;
+        }
+    }
 }
 
 static int try_to_find_alternative_nsyms_source(

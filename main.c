@@ -4,7 +4,7 @@
 #include "elf-types.h"
 #include "elf-parsing.h"
 #include "elf-patching.h"
-#include "elf-dyn-rel-parsing.h"
+#include "elf-rel-parsing.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

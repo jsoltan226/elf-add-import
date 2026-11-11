@@ -1,4 +1,4 @@
-#include "elf-dyn-rel-parsing.h"
+#include "elf-rel-parsing.h"
 #include "elf-types.h"
 #include "elf.h"
 #include "ctx.h"

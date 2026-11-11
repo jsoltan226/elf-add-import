@@ -517,6 +517,8 @@ static int find_validate_strtab_shdr(const struct elf_shdrs *shdrs,
     /* Skip the first reserved section header */
     for (Elf64_Xword i = 1; i < shdrs->num; i++) {
         const Elf64_Shdr *const curr = &shdrs->arr[i];
+        if (curr->sh_size == 0)
+            continue;
 
         const bool vaddr_overlap = curr->sh_flags & SHF_ALLOC &&
             ranges_overlap(curr->sh_addr, curr->sh_size, addr, size);

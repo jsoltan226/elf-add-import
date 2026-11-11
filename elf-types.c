@@ -37,6 +37,44 @@ static int read_byte(const ElfFileData *data, Elf64_Off *off_p, uint8_t *out);
  */
 static int write_byte(ElfFileData *data, Elf64_Off *off_p, uint8_t val);
 
+/**
+ * Converts the 64-bit representation of the `r_info` field.
+ * of the `ElfXX_Rel` and `ElfXX_Rela` structs into 32-bit.
+ *
+ * Due to the bit layout of the word being different between classes
+ * (unlike with any other "split word" field in any other ELF struct),
+ * the bits need to be reordered correctly to match the target representation.
+ *
+ * This function also checks that the values fit within the smaller number
+ * of bits the 32-bit variant provides.
+ *
+ * @param[in] r_info_64 The 64-bit `r_info` value to convert.
+ *
+ * @param[out] out Output pointer for the converted 32-bit `r_info` value.
+ *  Must not be NULL.
+ *
+ * @return 0 on success,
+ *  non-zero if the value cannot fit in the 32-bit representation.
+ */
+static inline int rel_r_info_to32(Elf64_Xword r_info_64, Elf64_Word *out);
+
+/**
+ * Converts the 64-bit representation of the `r_info` field.
+ * of the `ElfXX_Rel` and `ElfXX_Rela` structs into 32-bit.
+ *
+ * Due to the bit layout of the word being different between classes
+ * (unlike with any other "split word" field in any other ELF struct),
+ * the bits need to be reordered correctly to match the target representation.
+ *
+ * Unlike with `rel_r_info_to32`, nothing needs checking as 32-bit values,
+ * including the individual bitfields, always fit in the 64-bit representation.
+ *
+ * @param[in] r_info_32 The 32-bit `r_info` value to convert.
+ *
+ * @return The converted 64-bit `r_info` value.
+ */
+static inline Elf64_Xword rel_r_info_from32(Elf64_Word r_info_32);
+
 static inline bool host_is_little_endian(void)
 {
     const uint16_t x = UINT16_C(1);
@@ -651,18 +689,6 @@ int write_sym(ElfFileData *data, Elf64_Off *off_p, const Elf64_Sym *sym) {
     return 0;
 }
 
-int write_verdef(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdef *vd)
-{
-    return 0
-        || write_Half(data, off_p, vd->vd_version)
-        || write_Half(data, off_p, vd->vd_flags)
-        || write_Half(data, off_p, vd->vd_ndx)
-        || write_Half(data, off_p, vd->vd_cnt)
-        || write_Word(data, off_p, vd->vd_hash)
-        || write_Word(data, off_p, vd->vd_aux)
-        || write_Word(data, off_p, vd->vd_next);
-}
-
 int read_verdef(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdef *out)
 {
     return 0
@@ -675,10 +701,16 @@ int read_verdef(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdef *out)
         || read_Word(data, off_p, &out->vd_next);
 }
 
-int write_verdaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdaux *vda)
+int write_verdef(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdef *vd)
 {
-    return write_Word(data, off_p, vda->vda_name) ||
-           write_Word(data, off_p, vda->vda_next);
+    return 0
+        || write_Half(data, off_p, vd->vd_version)
+        || write_Half(data, off_p, vd->vd_flags)
+        || write_Half(data, off_p, vd->vd_ndx)
+        || write_Half(data, off_p, vd->vd_cnt)
+        || write_Word(data, off_p, vd->vd_hash)
+        || write_Word(data, off_p, vd->vd_aux)
+        || write_Word(data, off_p, vd->vd_next);
 }
 
 int read_verdaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdaux *out)
@@ -687,14 +719,10 @@ int read_verdaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdaux *out)
            read_Word(data, off_p, &out->vda_next);
 }
 
-int write_verneed(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verneed *vn)
+int write_verdaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdaux *vda)
 {
-    return 0
-        || write_Half(data, off_p, vn->vn_version)
-        || write_Half(data, off_p, vn->vn_cnt)
-        || write_Word(data, off_p, vn->vn_file)
-        || write_Word(data, off_p, vn->vn_aux)
-        || write_Word(data, off_p, vn->vn_next);
+    return write_Word(data, off_p, vda->vda_name) ||
+           write_Word(data, off_p, vda->vda_next);
 }
 
 int read_verneed(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verneed *out)
@@ -719,14 +747,14 @@ int read_verneed(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verneed *out)
     return ret;
 }
 
-int write_vernaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Vernaux *vna)
+int write_verneed(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verneed *vn)
 {
     return 0
-        || write_Word(data, off_p, vna->vna_hash)
-        || write_Half(data, off_p, vna->vna_flags)
-        || write_Half(data, off_p, vna->vna_other)
-        || write_Word(data, off_p, vna->vna_name)
-        || write_Word(data, off_p, vna->vna_next);
+        || write_Half(data, off_p, vn->vn_version)
+        || write_Half(data, off_p, vn->vn_cnt)
+        || write_Word(data, off_p, vn->vn_file)
+        || write_Word(data, off_p, vn->vn_aux)
+        || write_Word(data, off_p, vn->vn_next);
 }
 
 int read_vernaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Vernaux *out)
@@ -749,6 +777,143 @@ int read_vernaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Vernaux *out)
 #endif /* 0 */
 
     return ret;
+}
+
+int write_vernaux(ElfFileData *data, Elf64_Off *off_p, const Elf64_Vernaux *vna)
+{
+    return 0
+        || write_Word(data, off_p, vna->vna_hash)
+        || write_Half(data, off_p, vna->vna_flags)
+        || write_Half(data, off_p, vna->vna_other)
+        || write_Word(data, off_p, vna->vna_name)
+        || write_Word(data, off_p, vna->vna_next);
+}
+
+int read_rel(const ElfFileData *data, Elf64_Off *off_p, Elf64_Rel *out)
+{
+    if (read_Addr(data, off_p, &out->r_offset))
+        return 1;
+
+    if (data->clazz == ELFCLASS32) {
+        Elf64_Word tmp_r_info;
+        if (read_Word(data, off_p, &tmp_r_info))
+            return 1;
+        /* Convert the `r_info` field into the 64-bit representation */
+        out->r_info = rel_r_info_from32(tmp_r_info);
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (read_Xword(data, off_p, &out->r_info))
+            return 1;
+    }
+
+    return 0;
+}
+
+int write_rel(ElfFileData *data, Elf64_Off *off_p, const Elf64_Rel *rel)
+{
+    if (write_Addr(data, off_p, rel->r_offset))
+        return 1;
+
+    if (data->clazz == ELFCLASS32) {
+        /* Convert the `r_info` field into the 32-bit representation */
+        Elf64_Word r_info_32;
+        if (rel_r_info_to32(rel->r_info, &r_info_32))
+            return 1;
+
+        if (write_Word(data, off_p, r_info_32))
+            return 1;
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (write_Xword(data, off_p, rel->r_info))
+            return 1;
+    }
+
+    return 0;
+}
+
+int read_rela(const ElfFileData *data, Elf64_Off *off_p, Elf64_Rela *out)
+{
+    if (read_Addr(data, off_p, &out->r_offset))
+        return 1;
+
+    if (data->clazz == ELFCLASS32) {
+        Elf64_Word tmp_r_info;
+        if (read_Word(data, off_p, &tmp_r_info))
+            return 1;
+        /* Convert the `r_info` field into the 64-bit representation */
+        out->r_info = rel_r_info_from32(tmp_r_info);
+
+        Elf64_Sword tmp_r_addend;
+        if (read_Sword(data, off_p, &tmp_r_addend))
+            return 1;
+        out->r_addend = (Elf64_Sxword)tmp_r_addend;
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (read_Xword(data, off_p, &out->r_info))
+            return 1;
+
+        if (read_Sxword(data, off_p, &out->r_addend))
+            return 1;
+    }
+
+    return 0;
+}
+
+int write_rela(ElfFileData *data, Elf64_Off *off_p, const Elf64_Rela *rela)
+{
+    if (write_Addr(data, off_p, rela->r_offset))
+        return 1;
+
+    if (data->clazz == ELFCLASS32) {
+        /* Convert the `r_info` field into the 32-bit representation */
+        Elf64_Word r_info_32;
+        if (rel_r_info_to32(rela->r_info, &r_info_32))
+            return 1;
+
+        if (write_Word(data, off_p, r_info_32))
+            return 1;
+
+        if (rela->r_addend < INT32_MIN || rela->r_addend > INT32_MAX) {
+            pr_error("%s: r_addend value outside of 32-bit integer limits\n",
+                     __func__);
+            return 1;
+        } else if (write_Sword(data, off_p, (Elf64_Sword)rela->r_addend))
+            return 1;
+
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        if (write_Xword(data, off_p, rela->r_info))
+            return 1;
+
+        if (write_Sxword(data, off_p, rela->r_addend))
+            return 1;
+    }
+
+    return 0;
+}
+
+int read_relr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Relr *out)
+{
+    if (data->clazz == ELFCLASS32) {
+        Elf32_Word tmp = 0;
+        if (read_Word(data, off_p, &tmp))
+            return 1;
+
+        *out = (Elf64_Xword)tmp;
+        return 0;
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        return read_Xword(data, off_p, out);
+    }
+}
+
+int write_relr(ElfFileData *data, Elf64_Off *off_p, Elf64_Relr relr)
+{
+    if (data->clazz == ELFCLASS32) {
+        if (relr > UINT32_MAX) {
+            pr_error("%s: relr value outside of 32-bit integer limit\n",
+                     __func__);
+            return 1;
+        }
+        return write_Word(data, off_p, (Elf64_Word)relr);
+    } else /* if (data->clazz == ELFCLASS64) */ {
+        return write_Xword(data, off_p, relr);
+    }
 }
 
 const char * elf_type_toString(Elf64_Half et)
@@ -1172,4 +1337,32 @@ static int write_byte(ElfFileData *data, Elf64_Off *off_p, uint8_t val) {
 
     data->buf[(*off_p)++] = val;
     return 0;
+}
+
+static inline int rel_r_info_to32(Elf64_Xword r_info_64, Elf64_Word *out)
+{
+    const Elf64_Xword r_sym = ELF64_R_SYM(r_info_64);
+    if (r_sym >= (UINT64_C(1) << 24)) {
+        pr_error("r_info R_SYM value too large "
+                 "for the 32-bit version of the field\n");
+        return 1;
+    }
+
+    const Elf64_Xword r_type = ELF64_R_TYPE(r_info_64);
+    if (r_type >= (UINT64_C(1) << 8)) {
+        pr_error("r_info R_TYPE value too large "
+                 "for the 32-bit version of the field\n");
+        return 1;
+    }
+
+    *out = ELF32_R_INFO((Elf32_Word)r_sym, (Elf32_Word)r_type);
+    return 0;
+}
+
+static inline Elf64_Xword rel_r_info_from32(Elf64_Word r_info_32)
+{
+    const Elf64_Word r_sym = ELF32_R_SYM(r_info_32);
+    const Elf64_Word r_type = ELF32_R_TYPE(r_info_32);
+
+    return ELF64_R_INFO((Elf64_Xword)r_sym, (Elf64_Xword)r_type);
 }

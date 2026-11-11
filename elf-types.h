@@ -279,7 +279,7 @@ int read_verdef(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdef *out);
  * @param[in] vd The in-memory symbol version definition struct to serialize.
  *  Must not be NULL.
  *
- * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ * @return 0 on success, non-zero if the serialized `vd` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
 int write_verdef(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verdef *vd);
@@ -314,7 +314,7 @@ int read_verdaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verdaux *out);
  * @param[in] vda The in-memory symbol version definition auxiliary information
  *  struct to serialize. Must not be NULL.
  *
- * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ * @return 0 on success, non-zero if the serialized `vda` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
 int write_verdaux(ElfFileData *data, Elf64_Off *off_p,
@@ -350,7 +350,7 @@ int read_verneed(const ElfFileData *data, Elf64_Off *off_p, Elf64_Verneed *out);
  * @param[in] vn The in-memory symbol version dependency struct to serialize.
  *  Must not be NULL.
  *
- * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ * @return 0 on success, non-zero if the serialized `vn` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
 int write_verneed(ElfFileData *data, Elf64_Off *off_p, const Elf64_Verneed *vn);
@@ -385,11 +385,135 @@ int read_vernaux(const ElfFileData *data, Elf64_Off *off_p, Elf64_Vernaux *out);
  * @param[in] vna The in-memory symbol version dependency auxiliary information
  *  struct to serialize. Must not be NULL.
  *
- * @return 0 on success, non-zero if the serialized `sym` can't fit in `data`
+ * @return 0 on success, non-zero if the serialized `vna` can't fit in `data`
  *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
  */
 int write_vernaux(ElfFileData *data, Elf64_Off *off_p,
                   const Elf64_Vernaux *vna);
+
+/**
+ * Parses a relocation (without addend) struct to the generic
+ * in-memory representation. The fields' values are not validated
+ * to be sensible or spec-compliant.
+ *
+ * NOTE: When `data->clazz` is `ELFCLASS32`,
+ * the `r_info` field is automatically converted to the 64-bit representation,
+ * so even when dealing with a 32-bit ELF, always use the 64-bit macros
+ * (`ELF64_R_SYM`, `ELF64_R_TYPE` and `ELF64_R_INFO`) to read/write the value.
+ *
+ * @param[in] data The data to read from. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the data is outside of buffer bounds.
+ */
+int read_rel(const ElfFileData *data, Elf64_Off *off_p, Elf64_Rel *out);
+
+/**
+ * Serializes a relocation (without addend) struct
+ * to the given class and data encoding.
+ *
+ * NOTE: When `data->clazz` is `ELFCLASS32`,
+ * the `r_info` field is automatically converted to the 32-bit representation,
+ * so even when dealing with a 32-bit ELF, always use the 64-bit macros
+ * (`ELF64_R_SYM`, `ELF64_R_TYPE` and `ELF64_R_INFO`) to read/write the value.
+ *
+ * @param[out] data The data to write into. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to write.
+ *  This value will be incremented to point past the newly written data.
+ *  Must not be NULL.
+ *
+ * @param[in] rel The in-memory relocation (without addend) struct to serialize.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the serialized `rel` can't fit in `data`
+ *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
+ */
+int write_rel(ElfFileData *data, Elf64_Off *off_p, const Elf64_Rel *rel);
+
+/**
+ * Parses a relocation (with addend) struct to the generic
+ * in-memory representation. The fields' values are not validated
+ * to be sensible or spec-compliant.
+ *
+ * NOTE: When `data->clazz` is `ELFCLASS32`,
+ * the `r_info` field is automatically converted to the 64-bit representation,
+ * so even when dealing with a 32-bit ELF, always use the 64-bit macros
+ * (`ELF64_R_SYM`, `ELF64_R_TYPE` and `ELF64_R_INFO`) to read/write the value.
+ *
+ * @param[in] data The data to read from. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the data is outside of buffer bounds.
+ */
+int read_rela(const ElfFileData *data, Elf64_Off *off_p, Elf64_Rela *out);
+
+/**
+ * Serializes a relocation (with addend) struct
+ * to the given class and data encoding.
+ *
+ * NOTE: When `data->clazz` is `ELFCLASS32`,
+ * the `r_info` field is automatically converted to the 32-bit representation,
+ * so even when dealing with a 32-bit ELF, always use the 64-bit macros
+ * (`ELF64_R_SYM`, `ELF64_R_TYPE` and `ELF64_R_INFO`) to read/write the value.
+ *
+ * @param[out] data The data to write into. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to write.
+ *  This value will be incremented to point past the newly written data.
+ *  Must not be NULL.
+ *
+ * @param[in] rela The in-memory relocation (with addend) struct to serialize.
+ *  Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the serialized `rela` can't fit in `data`
+ *  or `clazz` is `ELFCLASS32` and a value overflows the Elf32 equivalent type.
+ */
+int write_rela(ElfFileData *data, Elf64_Off *off_p, const Elf64_Rela *rela);
+
+/**
+ * Parses a relative relocation (RELR) entry to the generic
+ * in-memory representation. The value is not validated
+ * to be sensible or spec-compliant.
+ *
+ * @param[in] data The data to read from. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to read.
+ *  This value will be incremented to point past the read data.
+ *  Must not be NULL.
+ *
+ * @param[out] out Output pointer. Must not be NULL.
+ *
+ * @return 0 on success, non-zero if the data is outside of buffer bounds.
+ */
+int read_relr(const ElfFileData *data, Elf64_Off *off_p, Elf64_Relr *out);
+
+/**
+ * Serializes a relative relocation (RELR) entry
+ * to the given class and data encoding.
+ *
+ * @param[out] data The data to write into. Must not be NULL.
+ *
+ * @param[in,out] off_p A pointer to the offset at which to write.
+ *  This value will be incremented to point past the newly written data.
+ *  Must not be NULL.
+ *
+ * @param[in] relr The in-memory RELR entry value to serialize.
+ *
+ * @return 0 on success, non-zero if the serialized `relr` can't fit in `data`
+ *  or `clazz` is `ELFCLASS32` and `relr` overflows the equivalent Elf32 type.
+ */
+int write_relr(ElfFileData *data, Elf64_Off *off_p, Elf64_Relr relr);
 
 /**
  * Returns a string with the name of the ET_* ELF type

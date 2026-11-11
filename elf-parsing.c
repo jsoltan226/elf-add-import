@@ -676,6 +676,60 @@ int read_validate_shdrs(const ElfFileData *data, struct elf_shdrs *out,
     return ret;
 }
 
+int validate_shdr_mappings(const struct elf_phdrs *phdrs,
+                           const struct elf_shdrs *shdrs)
+{
+    int ret = 0;
+    for (Elf64_Xword i = 0; i < shdrs->num; i++) {
+        const Elf64_Shdr *const shdr = &shdrs->arr[i];
+
+        /* Only check sections that exist both in file and in memory */
+        if (shdr->sh_type == SHT_NOBITS || !(shdr->sh_flags & SHF_ALLOC))
+            continue;
+
+        bool ptload_containment_ok = true;
+
+        const elf_idx_t mem_ptload_idx =
+            find_containing_mem_ptload(phdrs, shdr->sh_addr, shdr->sh_size);
+        if (mem_ptload_idx == ELF_IDX_NULL) {
+            pr_error("Section header no %" PRIu64 "'s memory range "
+                     "not contained within any PT_LOAD segment", i);
+            ptload_containment_ok = false;
+        }
+        const elf_idx_t file_ptload_idx =
+            find_containing_file_ptload(phdrs, shdr->sh_offset, shdr->sh_size);
+        if (file_ptload_idx == ELF_IDX_NULL) {
+            pr_error("Section header no %" PRIu64 "'s file range "
+                     "not contained within any PT_LOAD segment", i);
+            ptload_containment_ok = false;
+        }
+
+        if (file_ptload_idx != mem_ptload_idx) {
+            pr_error("Section header no %" PRIu64 "'s file range "
+                     "is contained in a different PT_LOAD segment "
+                     "than its memory range\n", i);
+            ptload_containment_ok = false;
+        }
+
+        if (!ptload_containment_ok) {
+            ret = 1;
+            continue;
+        }
+
+        const Elf64_Phdr *const ptload = &phdrs->arr[mem_ptload_idx];
+
+        if (shdr->sh_addr - ptload->p_vaddr !=
+            shdr->sh_offset - ptload->p_offset)
+        {
+            pr_error("Section header no %" PRIu64 "'s file and memory ranges "
+                     "describe different bytes\n", i);
+            ret = 1;
+        }
+    }
+
+    return ret;
+}
+
 int parse_elf(uint8_t *buf, uint64_t size, struct elf *out, bool move)
 {
     if (buf == NULL) {
@@ -709,6 +763,11 @@ int parse_elf(uint8_t *buf, uint64_t size, struct elf *out, bool move)
 
     if (read_validate_phdrs(&d, &e.phdrs, &e.ehdr, &e.shdrs)) {
         pr_error("Invalid program headers\n");
+        goto err;
+    }
+
+    if (validate_shdr_mappings(&e.phdrs, &e.shdrs)) {
+        pr_error("Invalid section mappings\n");
         goto err;
     }
 
@@ -1255,8 +1314,17 @@ static int validate_shdr(
 
     if (shdr->sh_addr > UINT64_MAX - shdr->sh_size) {
         pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
-                "Section overflows address space\n", i, off);
+                 "Section overflows address space\n", i, off);
         ret = 1;
+    }
+
+    /* `sh_addralign` must be 0, 1 or a power of two */
+    if (shdr->sh_addralign > 0) {
+        if (!is_pow2(shdr->sh_addralign)) {
+            pr_error("[Section header no %" PRIu64 " (offset 0x%" PRIx64 ")]: "
+                     "sh_addralign value not 0, 1 or a power of two\n", i, off);
+            ret = 1;
+        }
     }
 
     if (shstrtab != NULL && shdr->sh_name != 0 &&

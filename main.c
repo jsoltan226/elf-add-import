@@ -4,7 +4,7 @@
 #include "elf-types.h"
 #include "elf-parsing.h"
 #include "elf-patching.h"
-#include "elf-dyn-sym-ver-parsing.h"
+#include "elf-dyn-rel-parsing.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -500,6 +500,38 @@ int main(int argc, char **argv)
                      "of the file, it might be already patched!\n");
         }
         list_sections(&elf);
+
+        struct elf_reloc rel = empty_reloc_st;
+        Elf64_Word max_symidx = 0;
+        if (parse_reloc(&elf.data, &elf.phdrs, &elf.shdrs, &elf.dyn.entries,
+                        &rel, &max_symidx))
+        {
+            pr_error("parse_reloc has failed\n");
+            destroy_rel(&rel);
+            goto err;
+        } else {
+            pr_debug("%zu section(s) overlap DT_REL: ", rel.rel.n_shdrs);
+            for (size_t i = 0; i < rel.rel.n_shdrs; i++)
+                pr_debug("%s ", section_name_strptr(&elf,
+                                elf.shdrs.arr[rel.rel.shdrs[i]].sh_name));
+            pr_debug("\n");
+            if (rel.rel.dt_relcount_idx != ELF_IDX_NULL)
+                pr_debug("DT_RELCOUNT: %" PRIu64 "\n", rel.rel.relcount);
+
+            pr_debug("%zu section(s) overlap DT_RELA: ", rel.rela.n_shdrs);
+            for (size_t i = 0; i < rel.rela.n_shdrs; i++)
+                pr_debug("%s ", section_name_strptr(&elf,
+                                elf.shdrs.arr[rel.rela.shdrs[i]].sh_name));
+            pr_debug("\n");
+            if (rel.rela.dt_relacount_idx != ELF_IDX_NULL)
+                pr_debug("DT_RELACOUNT: %" PRIu64 "\n", rel.rela.relacount);
+
+            pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
+        }
+        destroy_rel(&rel);
+#ifndef BUILD_TYPE_RELEASE
+        goto err;
+#endif /* BUILD_TYPE_RELEASE */
     }
 
     /** Modify the ELF **/
@@ -581,6 +613,9 @@ err:
 
 static void list_sections(const struct elf *elf)
 {
+#if 1
+    return;
+#endif /* 1 */
     for (elf_idx_t i = 0; i < elf->shdrs.num; i++) {
         const Elf64_Shdr *const shdr = get_shdr_ro(elf, i);
 

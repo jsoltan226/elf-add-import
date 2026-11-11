@@ -60,6 +60,13 @@ int read_validate_phdrs(const ElfFileData *data, struct elf_phdrs *out,
  * a warning will be printed and `out` will contain
  * a NULL array of size 0.
  *
+ * Another note: this function leaves out the check that confirms
+ * that every section that exists in both the file and memory views,
+ * is contained within some PT_LOAD segment and that they hold
+ * to the same bytes both in memory and in the file,
+ * as that check needs to be done after parsing the program headers.
+ * That task is therefore delegated to `validate_shdr_mappings`.
+ *
  * @param[in] data The ELF file data to read from.
  *
  * @param[out] out Output pointer for the parsed section header table.
@@ -76,6 +83,25 @@ int read_validate_phdrs(const ElfFileData *data, struct elf_phdrs *out,
  */
 int read_validate_shdrs(const ElfFileData *data, struct elf_shdrs *out,
                         const Elf64_Ehdr *ehdr, Elf64_Word *out_shstrndx);
+
+/**
+ * Checks that every section that occupies space both in the file
+ * and in memory (`sh_type != SHT_NOBITS && sh_flags & SHF_ALLOC`)
+ * is contained within a PT_LOAD segment and that
+ * both the file and memory views describe the same bytes
+ * (`shdr->sh_addr - PT_LOAD->sh_addr == shdr->sh_offset - PT_LOAD->sh_offset`).
+ *
+ * This function is separate from `read_validate_shdrs` due to the dependency
+ * on the program headers, which are parsed before the section headers.
+ *
+ * @param[in] phdrs The parsed program headers array. Must not be NULL.
+ *
+ * @param[in] shdrs The parsed section headers array. Must not be NULL.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
+int validate_shdr_mappings(const struct elf_phdrs *phdrs,
+                           const struct elf_shdrs *shdrs);
 
 /**
  * @brief The main top-level ELF parsing function.

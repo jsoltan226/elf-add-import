@@ -2108,6 +2108,7 @@ static int read_dynamic_symbol_table(
             goto err;
         }
 
+        /* `ELF64_ST_BIND` is the same as `ELF32_ST_BIND` */
         const unsigned char binding = ELF64_ST_BIND(arr[i].st_info);
         switch (binding) {
             case STB_LOCAL:
@@ -2130,6 +2131,7 @@ static int read_dynamic_symbol_table(
                 goto err;
         }
 
+        /* `ELF64_ST_TYPE` is the same as `ELF32_ST_TYPE` */
         const unsigned char type = ELF64_ST_TYPE(arr[i].st_info);
         switch (type) {
             case STT_NOTYPE: case STT_OBJECT: case STT_FUNC:
@@ -2502,6 +2504,7 @@ static int validate_sht_dynsym_if_exists(
     Elf64_Xword first_nonlocal = 0;
     while (first_nonlocal < nsyms &&
             ELF64_ST_BIND(symtab[first_nonlocal].st_info) == STB_LOCAL)
+            /* `ELF64_ST_BIND` is the same as `ELF32_ST_BIND` */
     {
         first_nonlocal++;
     }

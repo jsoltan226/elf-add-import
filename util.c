@@ -171,50 +171,53 @@ err:
     return NULL;
 }
 
-int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
-                 Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
-                 const struct elf_phdrs *phdrs, const ElfFileData *data,
-                 void **ptr_p, Elf64_Xword *out_new_file_size)
+void * resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
+                    Elf64_Off off, Elf64_Xword old_num, Elf64_Xword new_num,
+                    const struct elf_phdrs *phdrs, const ElfFileData *data,
+                    void *ptr, Elf64_Xword *out_new_file_size)
 {
-    if (mementsz == 0 || fileentsz == 0 || ptr_p == NULL ||
-        new_n_ents > SIZE_MAX)
-    {
+    Elf64_Xword old_total_file_size = 0, new_total_file_size = 0;
+    void *ret_arr = NULL;
+
+    if (mementsz == 0 || fileentsz == 0 || new_num > SIZE_MAX) {
         pr_error("%s: Invalid parameters\n", __func__);
-        return -1;
+        goto err;
     }
 
     /* Calculate sizes */
-    if (old_n_ents > UINT64_MAX / fileentsz
-#if SIZE_MAX < UINT64_MAX
-        || old_n_ents > SIZE_MAX / entsize
-#endif /* SIZE_MAX < UINT64_MAX */
-    ) {
-        pr_error("%s: Old table size too large (integer overflow)\n", __func__);
-        return -1;
+    {
+        if (old_num > UINT64_MAX / fileentsz) {
+            pr_error("%s: Old table size too large (integer overflow)\n",
+                    __func__);
+            goto err;
+        }
+        old_total_file_size = old_num * fileentsz;
     }
-    const Elf64_Xword old_total_file_size = old_n_ents * fileentsz;
 
-    if (new_n_ents > UINT64_MAX / fileentsz
-#if SIZE_MAX < UINT64_MAX
-        || new_n_ents > SIZE_MAX / entsize
-#endif /* SIZE_MAX < UINT64_MAX */
-    ) {
-        pr_error("%s: New table size too large (integer overflow)\n", __func__);
-        return 1;
+    {
+        if (new_num > UINT64_MAX / fileentsz
+#        if SIZE_MAX < UINT64_MAX
+            || new_num > SIZE_MAX / fileentsz
+#        endif /* SIZE_MAX < UINT64_MAX */
+        ) {
+            pr_error("%s: New table size too large (integer overflow)\n",
+                     __func__);
+            goto err;
+        }
+        new_total_file_size = new_num * fileentsz;
     }
-    const Elf64_Xword new_total_file_size = new_n_ents * fileentsz;
 
     /* Do bounds checks */
     if (data != NULL) {
         if (off > data->size || old_total_file_size > data->size - off) {
             pr_error("The table (at the current location!) "
                      "overflows file data\n");
-            return -1;
+            goto err;
         }
         if (off > data->size || new_total_file_size > data->size - off) {
             pr_error("The table at the new location "
                      "would overflow file data\n");
-            return 1;
+            goto err;
         }
     }
     if (phdrs != NULL) {
@@ -222,39 +225,52 @@ int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
                                            NULL, NULL))
         {
             pr_error("No single PT_LOAD segment would fully contain the table "
-                     "after resizing (to %" PRIu64 " entries)\n", new_n_ents);
-            return 1;
+                     "after resizing (to %" PRIu64 " entries)\n", new_num);
+            goto err;
         }
     }
 
     /* Actually realloc (and zero out) the data */
 
-    if (old_n_ents > new_n_ents) {
-        memset((uint8_t *)*ptr_p + (new_n_ents * mementsz), 0,
-                (old_n_ents - new_n_ents) * mementsz);
+    if (old_num > new_num) {
+        memset((uint8_t *)ptr + (new_num * mementsz), 0,
+                (old_num - new_num) * mementsz);
     }
 
-    *ptr_p = safe_realloc(ptr_p, (size_t)new_n_ents, mementsz);
-    if (*ptr_p == NULL) {
+    ret_arr = safe_realloc(&ptr, (size_t)new_num, mementsz);
+    if (ret_arr == NULL) {
         pr_error("%s: Realloc (to %" PRIu64 " entries) failed\n",
-                 __func__, new_n_ents);
-        return 1;
+                 __func__, new_num);
+        goto err;
     }
 
-    if (new_n_ents > old_n_ents) {
-        memset(((uint8_t *)*ptr_p) + (old_n_ents * mementsz), 0,
-               (new_n_ents - old_n_ents) * mementsz);
+    if (new_num > old_num) {
+        memset(((uint8_t *)ret_arr) + (old_num * mementsz), 0,
+               (new_num - old_num) * mementsz);
     }
 
     pr_debug("[%s] Resized table \"%s\" from "
              "0x%" PRIx64 " bytes (%" PRIu64 " entries) to "
              "0x%" PRIx64 " bytes (%" PRIu64 " entries) "
              "with bounds checks: data: %d, ptload: %d\n", __func__, name,
-             old_total_file_size, old_n_ents, new_total_file_size, new_n_ents,
+             old_total_file_size, old_num, new_total_file_size, new_num,
              (data != NULL), (phdrs != NULL)
     );
-    if (out_new_file_size != NULL) *out_new_file_size = new_total_file_size;
-    return 0;
+    if (out_new_file_size != NULL)
+        *out_new_file_size = new_total_file_size;
+    return ret_arr;
+
+err:
+    if (ptr != NULL) {
+        free(ptr);
+        ptr = NULL;
+    }
+    if (ret_arr != NULL) {
+        free(ret_arr);
+        ret_arr = NULL;
+    }
+
+    return NULL;
 }
 
 int stack_init(struct stack *st, size_t item_size)

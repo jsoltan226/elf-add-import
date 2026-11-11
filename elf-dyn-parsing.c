@@ -5,6 +5,7 @@
 #include "util.h"
 #include "elf-types.h"
 #include "elf-dyn-sym-parsing.h"
+#include "elf-dyn-rel-parsing.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -194,6 +195,27 @@ int parse_dyn(const ElfFileData *data,
         }
     }
 
+        struct elf_reloc rel = empty_reloc_st;
+        Elf64_Word max_symidx = 0;
+        if (parse_reloc(data, phdrs, shdrs, &dyn.entries,
+                        &rel, &max_symidx))
+        {
+            pr_error("parse_reloc has failed\n");
+            destroy_rel(&rel);
+            goto err;
+        } else {
+            pr_debug("%zu section(s) overlap DT_REL\n", rel.rel.n_shdrs);
+            if (rel.rel.dt_relcount_idx != ELF_IDX_NULL)
+                pr_debug("DT_RELCOUNT: %" PRIu64 "\n", rel.rel.relcount);
+
+            pr_debug("%zu section(s) overlap DT_RELA\n", rel.rela.n_shdrs);
+            if (rel.rela.dt_relacount_idx != ELF_IDX_NULL)
+                pr_debug("DT_RELACOUNT: %" PRIu64 "\n", rel.rela.relacount);
+
+            pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
+        }
+        destroy_rel(&rel);
+
     /* Parse the dynamic symbol table (.dynsym),
      * along with the named symbol lookup table(s) `DT(GNU_)HASH` */
     if (parse_dynsym(data, phdrs, shdrs, &dyn.entries, &dyn.strtab,
@@ -211,6 +233,7 @@ int parse_dyn(const ElfFileData *data,
         pr_error("Failed to parse the dynamic symbol version information\n");
         goto err;
     }
+
 
     ret = 0;
 

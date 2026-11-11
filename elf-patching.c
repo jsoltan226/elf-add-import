@@ -55,11 +55,12 @@ int update_phnum(struct elf *elf, Elf64_Xword new_phnum)
         (pt_phdr_idx != ELF_IDX_NULL) ? &elf->phdrs : NULL;
 
     Elf64_Xword new_phdr_tbl_size = 0;
-    if (resize_table("program headers", sizeof(Elf64_Phdr), elf->phentsize,
-                     elf->ehdr.e_phoff, elf->phdrs.num, new_phnum,
-                     phdrs_for_ptload_check, &elf->data,
-                     (void **)&elf->phdrs.arr, &new_phdr_tbl_size))
-    {
+    elf->phdrs.arr = resize_table("program headers",
+            sizeof(Elf64_Phdr), elf->phentsize, elf->ehdr.e_phoff,
+            elf->phdrs.num, new_phnum, phdrs_for_ptload_check,
+            &elf->data, elf->phdrs.arr, &new_phdr_tbl_size
+    );
+    if (elf->phdrs.arr == NULL) {
         pr_error("Failed to resize the program header table\n");
         goto err;
     }
@@ -177,10 +178,12 @@ int update_shnum(struct elf *elf, Elf64_Xword new_shnum)
     }
 
     Elf64_Xword new_shdr_tbl_size = 0;
-    if (resize_table("section headers", sizeof(Elf64_Shdr), elf->shentsize,
-                     elf->ehdr.e_shoff, elf->shdrs.num, new_shnum, NULL,
-                     &elf->data, (void **)&elf->shdrs.arr, &new_shdr_tbl_size))
-    {
+    elf->shdrs.arr = resize_table("section headers",
+            sizeof(Elf64_Shdr), elf->shentsize, elf->ehdr.e_shoff,
+            elf->shdrs.num, new_shnum, NULL, &elf->data,
+            elf->shdrs.arr, &new_shdr_tbl_size
+    );
+    if (elf->shdrs.arr == NULL) {
         pr_error("Failed to resize the section header table\n");
         goto err;
     }
@@ -343,11 +346,12 @@ int update_dyn_tbl_num(struct elf *elf, Elf64_Xword new_dynnum)
     }
 
     Elf64_Xword new_dyn_tbl_size = 0;
-    if (resize_table("DYNAMIC entries", sizeof(Elf64_Dyn), elf->dynentsize,
-                     pt_dynamic->p_offset, elf->dyn.entries.num, new_dynnum,
-                     &elf->phdrs, &elf->data, (void **)&elf->dyn.entries.arr,
-                     &new_dyn_tbl_size))
-    {
+    elf->dyn.entries.arr = resize_table("DYNAMIC entries",
+            sizeof(Elf64_Dyn), elf->dynentsize, pt_dynamic->p_offset,
+            elf->dyn.entries.num, new_dynnum, &elf->phdrs, &elf->data,
+            elf->dyn.entries.arr, &new_dyn_tbl_size
+    );
+    if (elf->dyn.entries.arr == NULL) {
         pr_error("Failed to resize the DYNAMIC entries table\n");
         return 1;
     }
@@ -415,10 +419,11 @@ int update_dyn_sym_count(struct elf *elf, Elf64_Xword new_nsyms)
     struct elf_dyn_symtab *const symtab = &elf->dyn.symtab;
 
     Elf64_Xword new_symtab_size = 0;
-    if (resize_table("dynsym", sizeof(Elf64_Sym), elf->dynsymentsize,
-                     symtab->off, symtab->nsyms, new_nsyms, &elf->phdrs,
-                     &elf->data, (void **)&symtab->syms, &new_symtab_size))
-    {
+    symtab->syms = resize_table("dynsym", sizeof(Elf64_Sym), elf->dynsymentsize,
+                                symtab->off, symtab->nsyms, new_nsyms,
+                                &elf->phdrs, &elf->data, symtab->syms,
+                                &new_symtab_size);
+    if (symtab->syms == NULL) {
         pr_error("Failed to resize the dynamic symbol table\n");
         return 1;
     }

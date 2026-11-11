@@ -196,7 +196,7 @@ static inline bool ranges_overlap(uint64_t start1, uint64_t size1,
  * @param[in] new_n Like `calloc`'s `n` parameter;
  *  the desired new number of array entries.
  *
- * @param[in] size Like `calloc`'s `size parameter; size of the type.
+ * @param[in] size Like `calloc`'s `size` parameter; size of each entry.
  *
  * @return The new realloc'd pointer on success, NULL on failure.
  */
@@ -229,9 +229,9 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  * @param[in] off Offset of the table to be resized.
  *  Used for the bounds checks. Ignored if both of them are disabled.
  *
- * @param[in] old_n_ents Old (current) number of entries in the array.
+ * @param[in] old_num Old (current) number of entries in the array.
  *
- * @param[in] new_n_ents Desired new number of entries in the array.
+ * @param[in] new_num Desired new number of entries in the array.
  *
  * @param[in] phdrs Program headers array, used for the PT_LOAD bounds check.
  *  Pass in `NULL` to disable the PT_LOAD bounds check.
@@ -239,18 +239,20 @@ void * safe_realloc(void **ptr_p, size_t new_n, size_t size);
  * @param[in] data ELF file data, used for the file data bounds check.
  *  Pass in `NULL` to disable the file data bounds check.
  *
- * @param[in,out] ptr_p The pointer to the array to realloc. Must not be NULL.
+ * @param[in] ptr The array to realloc. Must be non-NULL iff `old_num > 0`.
+ *  After this function returns, the original value of `ptr` is considered
+ *  invalid and must be discarded, with the returned pointer being used instead.
  *
  * @param[out] out_new_file_size Output pointer for the new
  *  (class-dependent) file size of the table. May be NULL.
  *
- * @return 0 on success, non-zero on failure.
- *  In case of failure, `*ptr_p` is freed and set to `NULL`.
+ * @return The new realloc'd array on success, NULL on failure
+ *  (in which case the original provided `ptr` is freed).
  */
-int resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
-                 Elf64_Off off, Elf64_Xword old_n_ents, Elf64_Xword new_n_ents,
-                 const struct elf_phdrs *phdrs, const ElfFileData *data,
-                 void **ptr_p, Elf64_Xword *out_new_file_size);
+void * resize_table(const char *name, size_t mementsz, Elf64_Xword fileentsz,
+                    Elf64_Off off, Elf64_Xword old_num, Elf64_Xword new_num,
+                    const struct elf_phdrs *phdrs, const ElfFileData *data,
+                    void *ptr, Elf64_Xword *out_new_file_size);
 
 /**
  * @define Minimal capacity of a `struct stack`.

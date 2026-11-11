@@ -529,9 +529,9 @@ int main(int argc, char **argv)
             pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
         }
         destroy_rel(&rel);
-#ifndef BUILD_TYPE_RELEASE
+#if 0
         goto err;
-#endif /* BUILD_TYPE_RELEASE */
+#endif /* 0 */
     }
 
     /** Modify the ELF **/
@@ -1283,7 +1283,8 @@ static int prepare_move_data(bool wipe, ElfFileData *data,
     const Elf64_Off dst_end = dst_off + dst_size;
 
     if (dst_end > data->size) {
-        if ((data->buf = safe_realloc((void **)&data->buf, dst_end, 1))
+        void *tmp_data_buf = data->buf;
+        if ((data->buf = safe_realloc(&tmp_data_buf, dst_end, 1))
                 == NULL)
         {
             pr_error("Failed to grow (realloc) the ELF file data\n");

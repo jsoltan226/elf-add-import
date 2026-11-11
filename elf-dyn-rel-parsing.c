@@ -461,7 +461,7 @@ static int find_validate_sht_relX_shdrs(
         }
     }
     if (num == 0) {
-        pr_debug("No SHT_RELA sections overlapping the DT_REL(A) table\n");
+        pr_debug("No SHT_REL(A) sections overlapping the DT_REL(A) table\n");
         return 1;
     }
 
@@ -608,7 +608,7 @@ static int parse_dt_rel(
     sht_dynsym_idx = find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
     if (find_validate_sht_relX_shdrs(shdrs, rel.vaddr, rel.off, rel.size,
                                      sht_dynsym_idx, rel.entsize,
-                                     &rel.shdrs, &rel.n_shdrs, SHT_REL))
+                                     &rel.shdrs, &rel.n_shdrs, SHT_REL) < 0)
     {
         pr_error("Invalid SHT_REL section header(s)\n");
         goto err;
@@ -748,7 +748,7 @@ static int parse_dt_rela(
     sht_dynsym_idx = find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
     if (find_validate_sht_relX_shdrs(shdrs, rela.vaddr, rela.off, rela.size,
                                      sht_dynsym_idx, rela.entsize,
-                                     &rela.shdrs, &rela.n_shdrs, SHT_RELA))
+                                     &rela.shdrs, &rela.n_shdrs, SHT_RELA) < 0)
     {
         pr_error("Invalid SHT_RELA section header(s)\n");
         goto err;

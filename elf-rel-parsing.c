@@ -324,6 +324,48 @@ read_rela_table(const ElfFileData *data, Elf64_Off tbl_off, size_t num,
 }
 
 /**
+ * Finds, and if present, parses the table of relocations associated with
+ * the Procedure Linkage Table (PLT).
+ *
+ * Parses the metadata, and based on it, determines the type of relocations
+ * stored in the table (either ElfXX_Rel or ElfXX_Rela) and then calls
+ * the wrappers from the regular DT_REL/DT_RELA parsers to read them.
+ *
+ * Also finds any sections that overlap the PLT relocation table
+ * and validates them against the data from the dynamic entries and phdrs.
+ *
+ * @param[in] data The ELF file data. Must not be NULL.
+ *
+ * @param[in] phdrs The parsed program headers array. Must not be NULL.
+ *
+ * @param[in] shdrs The parsed section headers array. Must not be NULL.
+ *
+ * @param[in] entries The parsed dynamic entries array. Must not be NULL.
+ *
+ * @param[in] rel The parsed DT_REL relocation table (`parse_dt_rel`).
+ *  Must not be NULL.
+ *
+ * @param[in] rela The parsed DT_RELA relocation table (`parse_dt_rela`).
+ *  Must not be NULL.
+ *
+ * @param[in,out] max_symidx_p Pointer to a variable storing the highest-seen
+ *  dynamic symbol index referenced by a relocation entry. Must not be NULL.
+ *
+ * @param[out] out Output pointer, populated with actual values on success
+ *  and initialized to `empty_reloc_jmprel_st` otherwise. Must not be NULL.
+ *
+ * @return 0 on when the PLT relocation table was successfully parsed,
+ *  positive (>0) value if the PLT relocation table is not present,
+ *  negative (<0) value if the table is malformed or some other error occurred.
+ */
+static int parse_jmprel(
+        const ElfFileData *data, const struct elf_phdrs *phdrs,
+        const struct elf_shdrs *shdrs, const struct elf_dyn_entries *entries,
+        const struct elf_reloc_rel *rel, const struct elf_reloc_rela *rela,
+        Elf64_Word *max_symidx_p, struct elf_reloc_jmprel *out
+);
+
+/**
  * Locates and, if present, parses the metadata of the PLT relocation table,
  * initializing most of the values in the `elf_reloc_jmprel` structure.
  *
@@ -372,267 +414,7 @@ static int find_jmprel(
         const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
         const struct elf_reloc_rel *rel, const struct elf_reloc_rela *rela,
         struct elf_reloc_jmprel *out
-)
-{
-    *out = empty_reloc_jmprel_st;
-
-    Elf64_Addr jmprel_vaddr = 0;
-    Elf64_Xword jmprel_enttype = DT_NULL;
-    Elf64_Xword jmprel_size = 0;
-    enum { DT_JMPREL_IDX = 0, DT_PLTREL_IDX = 1, DT_PLTRELSZ_IDX = 2 };
-    elf_idx_t idxs[3] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL };
-    {
-        int r = find_unique_dyn_entries(entries, 3,
-                (Elf64_Sxword[]) { DT_JMPREL, DT_PLTREL, DT_PLTRELSZ }, idxs);
-        if (r < 0) {
-            pr_error("Invalid combination of DT_JMPREL/DT_PLTREL* entries\n");
-            return -1;
-        } else if (r > 0) {
-            pr_debug("JMPREL/PLTREL table not present\n");
-            return 1;
-        }
-
-        jmprel_vaddr = entries->arr[idxs[DT_JMPREL_IDX]].d_un.d_ptr;
-        jmprel_enttype = entries->arr[idxs[DT_PLTREL_IDX]].d_un.d_val;
-        jmprel_size = entries->arr[idxs[DT_PLTRELSZ_IDX]].d_un.d_val;
-    }
-
-    if (jmprel_enttype != DT_REL && jmprel_enttype != DT_RELA) {
-        pr_error("Invalid relocation type in DT_PLTREL\n");
-        return -1;
-    }
-
-    Elf64_Half entsize = 0;
-    size_t n_ents = 0;
-    {
-        const bool is32 = data->clazz == ELFCLASS32;
-        if (jmprel_enttype == DT_REL)
-            entsize = is32 ? sizeof(Elf32_Rel) : sizeof(Elf64_Rel);
-        else /* if (rel_type == DT_RELA) */
-            entsize = is32 ? sizeof(Elf32_Rela) : sizeof(Elf64_Rela);
-
-        if (jmprel_size % entsize != 0) {
-            pr_error("DT_PLTRELSZ is not divisible by the entry size\n");
-            return -1;
-        }
-        const Elf64_Xword tmp_nents = jmprel_size / entsize;
-        if (tmp_nents == 0) {
-            pr_error("DT_JMPREL contains zero entries\n");
-            return -1;
-        } else if (tmp_nents > SIZE_MAX) {
-            pr_error("Number of DT_JMPREL entries too large "
-                     "(integer overflow)\n");
-            return -1;
-        }
-
-        n_ents = (size_t)tmp_nents;
-    }
-
-    Elf64_Off jmprel_off = 0;
-    if (find_ptload_and_off_from_vaddr(jmprel_vaddr, jmprel_size, phdrs,
-                                       &jmprel_off, NULL))
-    {
-        pr_error("DT_JMPREL table not contained in any PT_LOAD segment\n");
-        return -1;
-    }
-
-    elf_idx_t relX_overlap_start_idx = ELF_IDX_NULL;
-    {
-        const bool overlaps_rel = rel->present &&
-            ranges_overlap(jmprel_vaddr, jmprel_size, rel->vaddr, rel->size);
-        const bool overlaps_rela = rela->present &&
-            ranges_overlap(jmprel_vaddr, jmprel_size, rela->vaddr, rela->size);
-        const bool overlaps_relX = overlaps_rel || overlaps_rela;
-
-        if (jmprel_enttype == DT_REL && overlaps_rela) {
-            pr_error("JMPREL contains REL entries but overlaps the RELA table\n");
-            return -1;
-        } else if (jmprel_enttype == DT_RELA && overlaps_rel) {
-            pr_error("JMPREL contains RELA entries but overlaps the REL table\n");
-            return -1;
-        }
-
-        {
-            const char *const relX_name =
-                jmprel_enttype == DT_REL ? "REL" : "RELA";
-            pr_debug("DT_JMPREL: %zu %s entries; overlaps DT_%s table: %d\n",
-                     n_ents, relX_name, relX_name, overlaps_relX);
-        }
-
-        if (overlaps_relX) {
-            const Elf64_Addr relX_vaddr =
-                jmprel_enttype == DT_REL ? rel->vaddr : rela->vaddr;
-            const Elf64_Xword relX_size =
-                jmprel_enttype == DT_REL ? rel->size : rela->size;
-
-
-            const Elf64_Addr relX_end = relX_vaddr + relX_size;
-            const Elf64_Addr jmprel_end = jmprel_vaddr + jmprel_size;
-
-            /*
-             * If the JMPREL table overlaps the REL* table,
-             * it must do so at the end of it, encompassing the last REL* entry,
-             * like so:
-             *  [ REL* ....    { JMPREL ... }]
-             *
-             * While this is theoretically processor-specific,
-             * glibc assumes it and so I feel comfortable doing the same.
-             */
-            if (jmprel_vaddr < relX_vaddr || jmprel_end != relX_end ||
-                (jmprel_vaddr - relX_vaddr) % entsize != 0)
-            {
-                pr_error("The JMPREL table overlaps the REL(A) table "
-                         "in an invalid way\n");
-                return -1;
-            }
-
-            relX_overlap_start_idx = (jmprel_vaddr - relX_vaddr) / entsize;
-        }
-    }
-
-    out->vaddr = jmprel_vaddr;
-    out->off = jmprel_off;
-    out->size = jmprel_size;
-    out->entsize = entsize;
-
-    out->enttype = jmprel_enttype;
-    out->arr = (union elf_reloc_jmprel_arr) { 0 };
-    out->num = n_ents;
-
-    out->dt_jmprel_idx = idxs[DT_JMPREL_IDX];
-    out->dt_pltrel_idx = idxs[DT_PLTREL_IDX];
-    out->dt_pltrelsz_idx = idxs[DT_PLTRELSZ_IDX];
-
-    out->n_shdrs = 0;
-    out->shdrs = NULL;
-
-    out->relX_overlap_start_idx = relX_overlap_start_idx;
-
-    return 0;
-}
-
-/**
- * Finds, and if present, parses the table of relocations associated with
- * the Procedure Linkage Table (PLT).
- *
- * Parses the metadata, and based on it, determines the type of relocations
- * stored in the table (either ElfXX_Rel or ElfXX_Rela) and then calls
- * the wrappers from the regular DT_REL/DT_RELA parsers to read them.
- *
- * Also finds any sections that overlap the PLT relocation table
- * and validates them against the data from the dynamic entries and phdrs.
- *
- * @param[in] data The ELF file data. Must not be NULL.
- *
- * @param[in] phdrs The parsed program headers array. Must not be NULL.
- *
- * @param[in] shdrs The parsed section headers array. Must not be NULL.
- *
- * @param[in] entries The parsed dynamic entries array. Must not be NULL.
- *
- * @param[in] rel The parsed DT_REL relocation table (`parse_dt_rel`).
- *  Must not be NULL.
- *
- * @param[in] rela The parsed DT_RELA relocation table (`parse_dt_rela`).
- *  Must not be NULL.
- *
- * @param[in,out] max_symidx_p Pointer to a variable storing the highest-seen
- *  dynamic symbol index referenced by a relocation entry. Must not be NULL.
- *
- * @param[out] out Output pointer, populated with actual values on success
- *  and initialized to `empty_reloc_jmprel_st` otherwise. Must not be NULL.
- *
- * @return 0 on when the PLT relocation table was successfully parsed,
- *  positive (>0) value if the PLT relocation table is not present,
- *  negative (<0) value if the table is malformed or some other error occurred.
- */
-static int parse_jmprel(
-        const ElfFileData *data, const struct elf_phdrs *phdrs,
-        const struct elf_shdrs *shdrs, const struct elf_dyn_entries *entries,
-        const struct elf_reloc_rel *rel, const struct elf_reloc_rela *rela,
-        Elf64_Word *max_symidx_p, struct elf_reloc_jmprel *out
-)
-{
-    *out = empty_reloc_jmprel_st;
-    struct elf_reloc_jmprel jmprel = empty_reloc_jmprel_st;
-
-    /* Parse the JMPREL table metadata */
-    int r = find_jmprel(data, phdrs, entries, rel, rela, &jmprel);
-    if (r < 0) {
-        pr_error("Invalid JMPREL table information\n");
-        return -1;
-    } else if (r > 0) {
-        /* already logged in `find_jmprel` */
-        return 1;
-    }
-
-    union elf_reloc_jmprel_arr arr = { 0 };
-    elf_idx_t *shdrs_arr = NULL;
-    size_t n_shdrs = 0;
-
-    const Elf64_Xword enttype = jmprel.enttype;
-    const Elf64_Off tbl_off = jmprel.off;
-    const size_t num = jmprel.num;
-
-    /* Read the JMPREL entries */
-    {
-        if (enttype == DT_REL) {
-            if (read_rel_table(data, tbl_off, num, &arr.rel, max_symidx_p)) {
-                pr_error("Failed to parse the JMPREL REL entries\n");
-                goto err;
-            }
-        } else /* if (enttype == DT_RELA) */ {
-            if (read_rela_table(data, tbl_off, num, &arr.rela, max_symidx_p)) {
-                pr_error("Failed to parse the JMPREL RELA entries\n");
-                goto err;
-            }
-        }
-    }
-
-    /* Find and parse sections overlapping the JMPREL table */
-    {
-        const Elf64_Word sh_type = (enttype == DT_REL) ? SHT_REL : SHT_RELA;
-        const elf_idx_t sht_dynsym_idx =
-            find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
-
-        r = find_validate_sht_relX_shdrs(
-                shdrs, jmprel.vaddr, jmprel.off, jmprel.size,
-                sht_dynsym_idx, jmprel.entsize,
-                &shdrs_arr, &n_shdrs, sh_type
-        );
-        if (r < 0) {
-            pr_error("Invalid PLTREL section headers\n");
-            goto err;
-        }
-    }
-
-    jmprel.arr = arr; arr = (union elf_reloc_jmprel_arr) { 0 };
-    jmprel.shdrs = shdrs_arr; shdrs_arr = NULL;
-    jmprel.n_shdrs = n_shdrs;
-
-    jmprel.present = true;
-    *out = jmprel;
-    jmprel = empty_reloc_jmprel_st;
-    return 0;
-
-err:
-    if (enttype == DT_REL) {
-        if (arr.rel != NULL) {
-            free(arr.rel);
-            arr.rel = NULL;
-        }
-    } else /* if (enttype == DT_RELA) */ {
-        if (arr.rela != NULL) {
-            free(arr.rela);
-            arr.rela = NULL;
-        }
-    }
-    if (shdrs_arr != NULL) {
-        free(shdrs_arr);
-        shdrs_arr = NULL;
-    }
-    return -1;
-}
+);
 
 int parse_reloc(const ElfFileData *data,
                 const struct elf_phdrs *phdrs, const struct elf_shdrs *shdrs,
@@ -1190,6 +972,238 @@ static int find_rela(const struct elf_dyn_entries *entries, int clazz,
 
     out->n_shdrs = 0;
     out->shdrs = NULL;
+
+    return 0;
+}
+
+static int parse_jmprel(
+        const ElfFileData *data, const struct elf_phdrs *phdrs,
+        const struct elf_shdrs *shdrs, const struct elf_dyn_entries *entries,
+        const struct elf_reloc_rel *rel, const struct elf_reloc_rela *rela,
+        Elf64_Word *max_symidx_p, struct elf_reloc_jmprel *out
+)
+{
+    *out = empty_reloc_jmprel_st;
+    struct elf_reloc_jmprel jmprel = empty_reloc_jmprel_st;
+
+    /* Parse the JMPREL table metadata */
+    int r = find_jmprel(data, phdrs, entries, rel, rela, &jmprel);
+    if (r < 0) {
+        pr_error("Invalid JMPREL table information\n");
+        return -1;
+    } else if (r > 0) {
+        /* already logged in `find_jmprel` */
+        return 1;
+    }
+
+    union elf_reloc_jmprel_arr arr = { 0 };
+    elf_idx_t *shdrs_arr = NULL;
+    size_t n_shdrs = 0;
+
+    const Elf64_Xword enttype = jmprel.enttype;
+    const Elf64_Off tbl_off = jmprel.off;
+    const size_t num = jmprel.num;
+
+    /* Read the JMPREL entries */
+    {
+        if (enttype == DT_REL) {
+            if (read_rel_table(data, tbl_off, num, &arr.rel, max_symidx_p)) {
+                pr_error("Failed to parse the JMPREL REL entries\n");
+                goto err;
+            }
+        } else /* if (enttype == DT_RELA) */ {
+            if (read_rela_table(data, tbl_off, num, &arr.rela, max_symidx_p)) {
+                pr_error("Failed to parse the JMPREL RELA entries\n");
+                goto err;
+            }
+        }
+    }
+
+    /* Find and parse sections overlapping the JMPREL table */
+    {
+        const Elf64_Word sh_type = (enttype == DT_REL) ? SHT_REL : SHT_RELA;
+        const elf_idx_t sht_dynsym_idx =
+            find_unique_shdr_by_type(shdrs, shdr_unique_SHT_DYNSYM);
+
+        r = find_validate_sht_relX_shdrs(
+                shdrs, jmprel.vaddr, jmprel.off, jmprel.size,
+                sht_dynsym_idx, jmprel.entsize,
+                &shdrs_arr, &n_shdrs, sh_type
+        );
+        if (r < 0) {
+            pr_error("Invalid PLTREL section headers\n");
+            goto err;
+        }
+    }
+
+    jmprel.arr = arr; arr = (union elf_reloc_jmprel_arr) { 0 };
+    jmprel.shdrs = shdrs_arr; shdrs_arr = NULL;
+    jmprel.n_shdrs = n_shdrs;
+
+    jmprel.present = true;
+    *out = jmprel;
+    jmprel = empty_reloc_jmprel_st;
+    return 0;
+
+err:
+    if (enttype == DT_REL) {
+        if (arr.rel != NULL) {
+            free(arr.rel);
+            arr.rel = NULL;
+        }
+    } else /* if (enttype == DT_RELA) */ {
+        if (arr.rela != NULL) {
+            free(arr.rela);
+            arr.rela = NULL;
+        }
+    }
+    if (shdrs_arr != NULL) {
+        free(shdrs_arr);
+        shdrs_arr = NULL;
+    }
+    return -1;
+}
+
+static int find_jmprel(
+        const ElfFileData *data,
+        const struct elf_phdrs *phdrs, const struct elf_dyn_entries *entries,
+        const struct elf_reloc_rel *rel, const struct elf_reloc_rela *rela,
+        struct elf_reloc_jmprel *out
+)
+{
+    *out = empty_reloc_jmprel_st;
+
+    Elf64_Addr jmprel_vaddr = 0;
+    Elf64_Xword jmprel_enttype = DT_NULL;
+    Elf64_Xword jmprel_size = 0;
+    enum { DT_JMPREL_IDX = 0, DT_PLTREL_IDX = 1, DT_PLTRELSZ_IDX = 2 };
+    elf_idx_t idxs[3] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL };
+    {
+        int r = find_unique_dyn_entries(entries, 3,
+                (Elf64_Sxword[]) { DT_JMPREL, DT_PLTREL, DT_PLTRELSZ }, idxs);
+        if (r < 0) {
+            pr_error("Invalid combination of DT_JMPREL/DT_PLTREL* entries\n");
+            return -1;
+        } else if (r > 0) {
+            pr_debug("JMPREL/PLTREL table not present\n");
+            return 1;
+        }
+
+        jmprel_vaddr = entries->arr[idxs[DT_JMPREL_IDX]].d_un.d_ptr;
+        jmprel_enttype = entries->arr[idxs[DT_PLTREL_IDX]].d_un.d_val;
+        jmprel_size = entries->arr[idxs[DT_PLTRELSZ_IDX]].d_un.d_val;
+    }
+
+    if (jmprel_enttype != DT_REL && jmprel_enttype != DT_RELA) {
+        pr_error("Invalid relocation type in DT_PLTREL\n");
+        return -1;
+    }
+
+    Elf64_Half entsize = 0;
+    size_t n_ents = 0;
+    {
+        const bool is32 = data->clazz == ELFCLASS32;
+        if (jmprel_enttype == DT_REL)
+            entsize = is32 ? sizeof(Elf32_Rel) : sizeof(Elf64_Rel);
+        else /* if (rel_type == DT_RELA) */
+            entsize = is32 ? sizeof(Elf32_Rela) : sizeof(Elf64_Rela);
+
+        if (jmprel_size % entsize != 0) {
+            pr_error("DT_PLTRELSZ is not divisible by the entry size\n");
+            return -1;
+        }
+        const Elf64_Xword tmp_nents = jmprel_size / entsize;
+        if (tmp_nents == 0) {
+            pr_error("DT_JMPREL contains zero entries\n");
+            return -1;
+        } else if (tmp_nents > SIZE_MAX) {
+            pr_error("Number of DT_JMPREL entries too large "
+                     "(integer overflow)\n");
+            return -1;
+        }
+
+        n_ents = (size_t)tmp_nents;
+    }
+
+    Elf64_Off jmprel_off = 0;
+    if (find_ptload_and_off_from_vaddr(jmprel_vaddr, jmprel_size, phdrs,
+                                       &jmprel_off, NULL))
+    {
+        pr_error("DT_JMPREL table not contained in any PT_LOAD segment\n");
+        return -1;
+    }
+
+    elf_idx_t relX_overlap_start_idx = ELF_IDX_NULL;
+    {
+        const bool overlaps_rel = rel->present &&
+            ranges_overlap(jmprel_vaddr, jmprel_size, rel->vaddr, rel->size);
+        const bool overlaps_rela = rela->present &&
+            ranges_overlap(jmprel_vaddr, jmprel_size, rela->vaddr, rela->size);
+        const bool overlaps_relX = overlaps_rel || overlaps_rela;
+
+        if (jmprel_enttype == DT_REL && overlaps_rela) {
+            pr_error("JMPREL contains REL entries but overlaps the RELA table\n");
+            return -1;
+        } else if (jmprel_enttype == DT_RELA && overlaps_rel) {
+            pr_error("JMPREL contains RELA entries but overlaps the REL table\n");
+            return -1;
+        }
+
+        {
+            const char *const relX_name =
+                jmprel_enttype == DT_REL ? "REL" : "RELA";
+            pr_debug("DT_JMPREL: %zu %s entries; overlaps DT_%s table: %d\n",
+                     n_ents, relX_name, relX_name, overlaps_relX);
+        }
+
+        if (overlaps_relX) {
+            const Elf64_Addr relX_vaddr =
+                jmprel_enttype == DT_REL ? rel->vaddr : rela->vaddr;
+            const Elf64_Xword relX_size =
+                jmprel_enttype == DT_REL ? rel->size : rela->size;
+
+
+            const Elf64_Addr relX_end = relX_vaddr + relX_size;
+            const Elf64_Addr jmprel_end = jmprel_vaddr + jmprel_size;
+
+            /*
+             * If the JMPREL table overlaps the REL* table,
+             * it must do so at the end of it, encompassing the last REL* entry,
+             * like so:
+             *  [ REL* ....    { JMPREL ... }]
+             *
+             * While this is theoretically processor-specific,
+             * glibc assumes it and so I feel comfortable doing the same.
+             */
+            if (jmprel_vaddr < relX_vaddr || jmprel_end != relX_end ||
+                (jmprel_vaddr - relX_vaddr) % entsize != 0)
+            {
+                pr_error("The JMPREL table overlaps the REL(A) table "
+                         "in an invalid way\n");
+                return -1;
+            }
+
+            relX_overlap_start_idx = (jmprel_vaddr - relX_vaddr) / entsize;
+        }
+    }
+
+    out->vaddr = jmprel_vaddr;
+    out->off = jmprel_off;
+    out->size = jmprel_size;
+    out->entsize = entsize;
+
+    out->enttype = jmprel_enttype;
+    out->arr = (union elf_reloc_jmprel_arr) { 0 };
+    out->num = n_ents;
+
+    out->dt_jmprel_idx = idxs[DT_JMPREL_IDX];
+    out->dt_pltrel_idx = idxs[DT_PLTREL_IDX];
+    out->dt_pltrelsz_idx = idxs[DT_PLTRELSZ_IDX];
+
+    out->n_shdrs = 0;
+    out->shdrs = NULL;
+
+    out->relX_overlap_start_idx = relX_overlap_start_idx;
 
     return 0;
 }

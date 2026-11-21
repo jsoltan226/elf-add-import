@@ -703,6 +703,14 @@ static int validate_sht_dynsym_if_exists(
  * and accepted with a warning, and must not be trusted without additional
  * information.
  *
+ * Another note: Unfortunately, in practice dynamic linkers usually don't
+ * emit this table and the corresponding DT_SYMTAB_SHNDX entry correctly.
+ * In such case, symbols with `st_shndx == SHN_XINDEX` cannot have their
+ * section references resolved at all. However, because we treat section headers
+ * and, by extension, references to them only as optional additional information
+ * to cross-check rather than the authoritative source of metadata,
+ * parsing is allowed to proceed despite these unresolvable `st_shndx` values.
+ *
  * @param[in] entries The dynamic entries array. Must not be NULL.
  *
  * @param[in] phdrs The program headers array. Must not be NULL.
@@ -728,16 +736,20 @@ static int validate_sht_dynsym_if_exists(
  *
  * @return
  *  0 on success:
- *      - SYMTAB_SHNDX was found and is valid,
- *      - SYMTAB_SHNDX was not found but `must_exist == false`
- *  non-zero on failure:
- *      - SYMTAB_SHNDX was found but is malformed,
- *      - SYMTAB_SHNDX was not found despite `must_exist == true`.
+ *      - Dynsym SYMTAB_SHNDX was found and is valid,
+ *      - Dynsym SYMTAB_SHNDX was found but the section headers are stripped -
+ *          warnings are spammed for each unresolvable shdr reference
+ *  positive (>0) value when the table is not present:
+ *      - Dynsym SYMTAB_SHNDX was not found but `must_exist == false`
+ *      - Dynsym SYMTAB_SHNDX was not found despite `must_exist == true` -
+ *          warnings are spammed for each unresolvable shdr reference
+ *  negative (<0) value on failure:
+ *      - SYMTAB_SHNDX was found but is malformed
  */
 static int parse_dyn_symtab_shndx_if_exists(
         const struct elf_dyn_entries *entries, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
-        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        const ElfFileData *data, const Elf64_Sym *symtab, Elf64_Xword nsyms,
         bool must_exist,
 
         struct elf_dyn_symtab_shndx *out
@@ -800,7 +812,7 @@ static int find_dyn_sht_symtab_shndx(const struct elf_shdrs *shdrs,
  * @return 0 on success, non-zero on failure.
  */
 static int read_symtab_shndx_contents(
-        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        const ElfFileData *data, const Elf64_Sym *symtab, Elf64_Xword nsyms,
         Elf64_Off start, Elf64_Xword size, const struct elf_shdrs *shdrs,
         Elf32_Word **out
 );
@@ -942,12 +954,13 @@ int parse_dynsym(
         goto err;
     }
 
-    /* Also parse the SYMTAB_SHNDX section, if required and/or present */
+    /* Also parse the SYMTAB_SHNDX table associated with the dynsym table */
     if (parse_dyn_symtab_shndx_if_exists(entries, phdrs, shdrs, sht_dynsym_idx,
                                          data, sym_arr, nsyms,
-                                         uses_symtab_shndx, out_symtab_shndx))
+                                         uses_symtab_shndx, out_symtab_shndx)
+            < 0)
     {
-        pr_error("Invalid DT/SHT_SYMTAB_SHNDX\n");
+        pr_error("Invalid Dynsym SYMTAB_SHNDX table\n");
         goto err;
     }
 
@@ -1172,8 +1185,6 @@ static int find_dt_hash(
     const int r = find_unique_dyn_entries(entries, 1,
                 (Elf64_Sxword[]) { DT_HASH }, &dt_hash_idx);
     if (r) {
-        pr_debug("%s DT_HASH entry\n",
-                 r < 0 ? "Duplicate" : "Missing");
         /* Duplicate (r == -1) means >invalid< (should return -1)
          * while Missing (r == 1) just >not found< (should return 1) */
         return r;
@@ -1547,8 +1558,6 @@ static int read_dt_gnu_hash_hdr(const ElfFileData *data, Elf64_Off *off_p,
         ret = 1;
     }
 
-    pr_debug("DT_GNU_HASH nbuckets: %" PRIu32 "\n", out->nbuckets);
-
     return ret;
 }
 
@@ -1566,8 +1575,6 @@ static int find_dt_gnu_hash(
     const int r = find_unique_dyn_entries(entries, 1,
             (const Elf64_Sxword[]) { DT_GNU_HASH }, &dt_gnu_hash_idx);
     if (r) {
-        pr_debug("%s DT_HASH entry\n",
-                 r < 0 ? "Duplicate" : "Missing");
         /* Duplicate (r == -1) means >invalid< (should return -1)
          * while Missing (r == 1) just >not found< (should return 1) */
         return r;
@@ -2520,7 +2527,7 @@ static int validate_sht_dynsym_if_exists(
 static int parse_dyn_symtab_shndx_if_exists(
         const struct elf_dyn_entries *entries, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, elf_idx_t sht_dynsym_idx,
-        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        const ElfFileData *data, const Elf64_Sym *symtab, Elf64_Xword nsyms,
         bool must_exist,
 
         struct elf_dyn_symtab_shndx *out
@@ -2540,23 +2547,30 @@ static int parse_dyn_symtab_shndx_if_exists(
         );
         if (r < 0) {
             pr_error("Duplicate DT_SYMTAB_SHNDX entries\n");
-            return 1;
+            return -1;
         }
         dyn_entry_exists = r == 0;
 
         r = find_dyn_sht_symtab_shndx(shdrs, sht_dynsym_idx,
                                       &sht_symtab_shndx_idx);
         if (r < 0) {
-            pr_error("Invalid dynsym SHT_SYMTAB_SHNDX section\n");
-            return 1;
+            pr_error("Invalid dynsym SHT_SYMTAB_SHNDX section header\n");
+            return -1;
         }
         shdr_exists = r == 0;
 
         exists_at_all = dyn_entry_exists || shdr_exists;
         if (!exists_at_all && !must_exist) {
-            return 0;
+            return 1;
         } else if (!exists_at_all && must_exist) {
             pr_error("No DT_SYMTAB_SHNDX entry even though it's needed\n");
+            for (Elf64_Xword i = 0; i < nsyms; i++) {
+                if (symtab[i].st_shndx == SHN_XINDEX) {
+                    pr_error("WARNING: Dynamic symbol %" PRIu64 " has its "
+                             "section reference stored in a dynsym SYMTAB_SHNDX "
+                             "table, which is missing\n", i);
+                }
+            }
             return 1;
         }
 
@@ -2576,7 +2590,7 @@ static int parse_dyn_symtab_shndx_if_exists(
     if (nsyms > UINT64_MAX / sizeof(Elf32_Word)) {
         pr_error("Number of symbols too large to calculate "
                  "DT_SYMTAB_SHNDX size (integer overflow)\n");
-        return 1;
+        return -1;
     }
     const Elf64_Xword size = nsyms * sizeof(Elf32_Word);
 
@@ -2584,7 +2598,7 @@ static int parse_dyn_symtab_shndx_if_exists(
     if (find_ptload_and_off_from_vaddr(vaddr, size, phdrs, &off, NULL)) {
         pr_error("No PT_LOAD segment contains the "
                  "DT_SYMTAB_SHNDX contents\n");
-        return 1;
+        return -1;
     }
 
     /* Read the SYMTAB_SHNDX contents */
@@ -2593,7 +2607,7 @@ static int parse_dyn_symtab_shndx_if_exists(
                                    &arr))
     {
         pr_error("Failed to parse the dynsym SYMTAB_SHNDX contents\n");
-        return 1;
+        return -1;
     }
     /* No more `return` without first freeing `arr` */
     {
@@ -2610,7 +2624,7 @@ static int parse_dyn_symtab_shndx_if_exists(
             {
                 pr_error("Invalid dynsym SHT_SYMTAB_SHNDX section\n");
                 free(arr); arr = NULL;
-                return 1;
+                return -1;
             }
         }
 
@@ -2660,7 +2674,7 @@ static int find_dyn_sht_symtab_shndx(const struct elf_shdrs *shdrs,
 }
 
 static int read_symtab_shndx_contents(
-        const ElfFileData *data, Elf64_Sym *symtab, Elf64_Xword nsyms,
+        const ElfFileData *data, const Elf64_Sym *symtab, Elf64_Xword nsyms,
         Elf64_Off start, Elf64_Xword size, const struct elf_shdrs *shdrs,
         Elf32_Word **out
 )

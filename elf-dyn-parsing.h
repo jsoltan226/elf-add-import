@@ -88,7 +88,7 @@ struct elf_dynamic {
     /** Data related to the legacy DT_HASH symbol lookup table. */
     struct elf_dt_hash hash;
 
-    /** Data related to the new DT_GNU_HASH symbol lookup table. */
+    /** Data related to the modern DT_GNU_HASH symbol lookup table. */
     struct elf_dt_gnu_hash gnu_hash;
 
     /** Data related to the dynamic symbol table (`.dynsym`). */

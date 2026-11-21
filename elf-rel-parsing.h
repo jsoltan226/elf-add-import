@@ -25,7 +25,7 @@ struct elf_reloc {
      */
     struct elf_reloc_rel {
         /**
-         * Indicates whether a DT_RELA table is present
+         * Indicates whether a DT_REL table is present
          * and was successfully parsed.
          *
          * When false, all other members are semantically empty and must not
@@ -66,21 +66,21 @@ struct elf_reloc {
         /**
          * Index into the dynamic entries array of the `DT_REL` entry,
          * whose value is equal to that of `vaddr`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_rel_idx;
 
         /**
          * Index into the dynamic entries array of the `DT_RELSZ` entry,
          * whose value is equal to that of `size`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relsz_idx;
 
         /**
          * Index into the dynamic entries array of the `DT_RELENT` entry,
          * whose value is equal to that of `entsize`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relent_idx;
 
@@ -92,15 +92,10 @@ struct elf_reloc {
         elf_idx_t dt_relcount_idx;
 
         /**
-         * If the `DT_RELCOUNT` entry exists, the relocation entries must be
-         * sorted such that all the `R_*_RELATIVE` relocations are placed
-         * together (contiguously) at the start of the array.
-         *
-         * This is used for optimisation, as it allows the loader to perform
-         * the relative relocations (which need to be handled at startup)
-         * much quicker because the whole table doesn't need to be searched
-         * and filtered for only relative relocations - they are all
-         * neatly packed together in one place.
+         * If the `DT_RELCOUNT` entry exists, the first `relcount` entries
+         * in the DT_REL table are `R_*_RELATIVE` relocations.
+         * This allows the loader to process those entries without
+         * having to scan the entire table to identify relative relocations.
          *
          * @brief
          * This value represents the number of relative (`R_*_RELATIVE`)
@@ -138,7 +133,7 @@ struct elf_reloc {
      */
     struct elf_reloc_rela {
         /**
-         * Indicates whether a DT_REL table is present
+         * Indicates whether a DT_RELA table is present
          * and was successfully parsed.
          *
          * When false, all other members are semantically empty and must not
@@ -179,21 +174,21 @@ struct elf_reloc {
         /**
          * Index into the dynamic entries array of the `DT_RELA` entry,
          * whose value is equal to that of `vaddr`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_rela_idx;
 
         /**
          * Index into the dynamic entries array of the `DT_RELASZ` entry,
          * whose value is equal to that of `size`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relasz_idx;
 
         /**
          * Index into the dynamic entries array of the `DT_RELAENT` entry,
          * whose value is equal to that of `entsize`.
-         * Always a valid index if `present == true`
+         * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relaent_idx;
 
@@ -205,15 +200,10 @@ struct elf_reloc {
         elf_idx_t dt_relacount_idx;
 
         /**
-         * If the `DT_RELACOUNT` entry exists, the relocation entries must be
-         * sorted such that all the `R_*_RELATIVE` relocations are placed
-         * together (contiguously) at the start of the array.
-         *
-         * This is used for optimisation, as it allows the loader to perform
-         * the relative relocations (which need to be handled at startup)
-         * much quicker because the whole table doesn't need to be searched
-         * and filtered for only relative relocations - they are all
-         * neatly packed together in one place.
+         * If the `DT_RELACOUNT` entry exists, the first `relacount` entries
+         * in the DT_RELA table are `R_*_RELATIVE` relocations.
+         * This allows the loader to process those entries
+         * without scanning the entire table to identify relative relocations.
          *
          * @brief
          * This value represents the number of relative (`R_*_RELATIVE`)
@@ -246,14 +236,13 @@ struct elf_reloc {
      * It contains a table of either REL or RELA relocation entries
      * which are specifically related to the Procedure Linkage Table (PLT).
      *
-     * This separation of R_*_JUMP_SLOT relocations from the main DT_REL(A)
-     * is done to enable lazy binding, i.e. the symbol resolution not being
-     * performed immediately at startup, but instead when the corresponding
-     * PLT function gets called for the first time.
+     * This separation of PLT-related (e.g. `R_*_JUMP_SLOT`) relocations
+     * from the main DT_REL(A) allows the dynamic linker to identify them
+     * independently of the main relocation table.
      *
-     * While today a lot of ELFs disable lazy binding for security reasons,
-     * the separation of the tables is kept for historical and
-     * optimisation-related reasons.
+     * On systems using lazy binding, this separation allows the linker
+     * to defer the relevant symbol resolutions
+     * until the corresponding PLT entries are first called.
      *
      * On another note, the authors of the spec made the naming quite a mess.
      * For all intents and purposes, names with `JMP` and `PLT` all refer
@@ -360,14 +349,15 @@ struct elf_reloc {
         elf_idx_t dt_pltrelsz_idx;
 
         /**
-         * Number of section headers overlapping the PLT relocation table;
-         * the size of `shdrs`.
+         * Number of SHT_REL(A) section headers that overlap
+         * the PLT relocation table; the size of `shdrs`.
          */
         size_t n_shdrs;
 
         /**
-         * Array of `n_shdrs` indices of the sections that overlap the
-         * PLT relocation table. If `n_shdrs == 0`, this member holds `NULL`.
+         * Array of `n_shdrs` indices of the SHT_REL(A) (depending on `enttype`)
+         * sections that overlap the PLT relocation table.
+         * If `n_shdrs == 0`, this member holds `NULL`.
          */
         elf_idx_t *shdrs;
 
@@ -400,6 +390,104 @@ struct elf_reloc {
          */
         elf_idx_t relX_overlap_start_idx;
     } jmprel; /**< The table of relocations related to the PLT. */
+
+    struct elf_reloc_relr {
+        /**
+         * Indicates whether a DT_RELR table is present
+         * and was successfully parsed.
+         *
+         * When false, all other members are semantically empty and must not
+         * be used. When true, the table and its associated metadata are valid.
+         */
+        bool present;
+
+        /**
+         * Virtual address of the packed relative relocation table;
+         * the value of the DT_RELR entry.
+         */
+        Elf64_Addr vaddr;
+
+        /** File offset of the packed relative relocation table. */
+        Elf64_Off off;
+
+        /**
+         * Size (in bytes) of the entire packed relative relocation table;
+         * the value of DT_RELRSZ.
+         * Guaranteed to be greater than 0 and divisible by `entsize`.
+         */
+        Elf64_Xword size;
+
+        /** Size of each ElfXX_Relr entry; the value of `DT_RELRENT`. */
+        Elf64_Half entsize;
+
+        /**
+         * The array of `num` parsed ElfXX_Relr entries.
+         * Always non-NULL since zero-sized tables are rejected by the parser.
+         */
+        Elf64_Relr *arr;
+
+        /**
+         * The number of entries in `arr`; equal to `DT_RELRSZ / DT_RELRENT`.
+         * Always greater than 0.
+         */
+        size_t num;
+
+        /**
+         * The array of `num_decoded` decoded RELR entries, i.e.
+         * a list of addresses to which a relative relocation is to be applied,
+         * like this: `*addr = *addr + load_bias`.
+         *
+         * See the description of `read_decode_relr` in `elf-rel-parsing.c`
+         * for more details.
+         *
+         * Since zero-sized raw RELR tables are rejected,
+         * the decoded array's size is also guaranteed to be greater than 0,
+         * therefore this value is never NULL (if `present == true`).
+         */
+        Elf64_Addr *decoded_arr;
+
+        /**
+         * The number of decoded RELR entries; the size of `decoded_arr`.
+         * Guaranteed to be greater than 0.
+         * See `decoded_arr` for more details.
+         */
+        size_t num_decoded;
+
+        /**
+         * Index into the dynamic entries array of the `DT_RELRSZ` entry,
+         * whose value is equal to that of `size`.
+         * Always a valid index if `present == true`.
+         */
+        elf_idx_t dt_relrsz_idx;
+
+        /**
+         * Index into the dynamic entries array of the `DT_RELR` entry,
+         * whose value is equal to that of `vaddr`.
+         * Always a valid index if `present == true`.
+         */
+        elf_idx_t dt_relr_idx;
+
+        /**
+         * Index into the dynamic entries array of the `DT_RELRENT` entry,
+         * whose value is equal to that of `entsize`.
+         * Always a valid index if `present == true`.
+         */
+        elf_idx_t dt_relrent_idx;
+
+
+        /**
+         * Number of `SHT_RELR` section headers that overlap the RELR table;
+         * the size of `shdrs`.
+         */
+        size_t n_shdrs;
+
+        /**
+         * Array of `n_shdrs` indices of the `SHT_RELR` sections
+         * that overlap the packed relative relocations table.
+         * If `n_shdrs == 0`, this member holds `NULL`.
+         */
+        elf_idx_t *shdrs;
+    } relr;
 };
 
 /**
@@ -472,21 +560,30 @@ static const union elf_reloc_jmprel_arr empty_reloc_jmprel_arr_un = { 0 };
 __attribute__((unused))
 static const struct elf_reloc_jmprel empty_reloc_jmprel_st = {
     .present = false,
-
     .vaddr = 0, .off = 0, .size = 0, .entsize = 0,
     .enttype = DT_NULL,
-
     .arr = empty_reloc_jmprel_arr_un,
     .num = 0,
-
     .dt_jmprel_idx = ELF_IDX_NULL,
     .dt_pltrel_idx = ELF_IDX_NULL,
     .dt_pltrelsz_idx = ELF_IDX_NULL,
-
-    .n_shdrs = 0,
-    .shdrs = NULL,
-
+    .n_shdrs = 0, .shdrs = NULL,
     .relX_overlap_start_idx = ELF_IDX_NULL
+};
+
+/**
+ * The `elf_reloc_relr` struct initialized to semantically empty (NULL) values.
+ */
+__attribute__((unused))
+static const struct elf_reloc_relr empty_reloc_relr_st = {
+    .present = false,
+    .vaddr = 0, .off = 0, .size = 0, .entsize = 0,
+    .arr = NULL, .num = 0,
+    .decoded_arr = NULL, .num_decoded = 0,
+    .dt_relrsz_idx = ELF_IDX_NULL,
+    .dt_relr_idx = ELF_IDX_NULL,
+    .dt_relrent_idx = ELF_IDX_NULL,
+    .n_shdrs = 0, .shdrs = NULL
 };
 
 /** The `elf_reloc` struct initialized to semantically empty (NULL) values. */
@@ -494,7 +591,8 @@ __attribute__((unused))
 static const struct elf_reloc empty_reloc_st = {
     .rel = empty_reloc_rel_st,
     .rela = empty_reloc_rela_st,
-    .jmprel = empty_reloc_jmprel_st
+    .jmprel = empty_reloc_jmprel_st,
+    .relr = empty_reloc_relr_st
 };
 
 #endif /* ELF_DYN_REL_PARSING_H_ */

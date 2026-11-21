@@ -537,6 +537,15 @@ int main(int argc, char **argv)
                 pr_debug("\n");
             }
 
+            if (rel.relr.present) {
+                pr_debug("%zu section(s) overlap DT_RELR: ", rel.relr.n_shdrs);
+                for (size_t i = 0; i < rel.relr.n_shdrs; i++)
+                    pr_debug("%s ", section_name_strptr(&elf,
+                                    elf.shdrs.arr[rel.relr.shdrs[i]].sh_name));
+                pr_debug("\n");
+            }
+
+            /* RELR relocations don't reference symbols */
             if (rel.rel.present || rel.rela.present || rel.jmprel.present)
                 pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
         }

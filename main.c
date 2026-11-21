@@ -510,23 +510,35 @@ int main(int argc, char **argv)
             destroy_rel(&rel);
             goto err;
         } else {
-            pr_debug("%zu section(s) overlap DT_REL: ", rel.rel.n_shdrs);
-            for (size_t i = 0; i < rel.rel.n_shdrs; i++)
-                pr_debug("%s ", section_name_strptr(&elf,
-                                elf.shdrs.arr[rel.rel.shdrs[i]].sh_name));
-            pr_debug("\n");
-            if (rel.rel.dt_relcount_idx != ELF_IDX_NULL)
-                pr_debug("DT_RELCOUNT: %" PRIu64 "\n", rel.rel.relcount);
+            if (rel.rel.present) {
+                pr_debug("%zu section(s) overlap DT_REL: ", rel.rel.n_shdrs);
+                for (size_t i = 0; i < rel.rel.n_shdrs; i++)
+                    pr_debug("%s ", section_name_strptr(&elf,
+                                    elf.shdrs.arr[rel.rel.shdrs[i]].sh_name));
+                pr_debug("\n");
+            }
 
-            pr_debug("%zu section(s) overlap DT_RELA: ", rel.rela.n_shdrs);
-            for (size_t i = 0; i < rel.rela.n_shdrs; i++)
-                pr_debug("%s ", section_name_strptr(&elf,
-                                elf.shdrs.arr[rel.rela.shdrs[i]].sh_name));
-            pr_debug("\n");
-            if (rel.rela.dt_relacount_idx != ELF_IDX_NULL)
-                pr_debug("DT_RELACOUNT: %" PRIu64 "\n", rel.rela.relacount);
+            if (rel.rela.present) {
+                pr_debug("%zu section(s) overlap DT_RELA: ", rel.rela.n_shdrs);
+                for (size_t i = 0; i < rel.rela.n_shdrs; i++)
+                    pr_debug("%s ", section_name_strptr(&elf,
+                                    elf.shdrs.arr[rel.rela.shdrs[i]].sh_name));
+                pr_debug("\n");
+            }
 
-            pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
+            if (rel.jmprel.present) {
+                pr_debug("%zu section(s) overlap DT_JMPREL: ",
+                         rel.jmprel.n_shdrs);
+                for (size_t i = 0; i < rel.jmprel.n_shdrs; i++) {
+                    const Elf64_Shdr *const shdr =
+                        &elf.shdrs.arr[rel.jmprel.shdrs[i]];
+                    pr_debug("%s ", section_name_strptr(&elf, shdr->sh_name));
+                }
+                pr_debug("\n");
+            }
+
+            if (rel.rel.present || rel.rela.present || rel.jmprel.present)
+                pr_debug("max_symidx: %" PRIu32 "\n", max_symidx);
         }
         destroy_rel(&rel);
 #if 0

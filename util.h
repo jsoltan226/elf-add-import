@@ -32,7 +32,7 @@ typedef Elf64_Xword elf_idx_t;
  * @define
  * Sentinel value for `elf_idx_t` which indicates that an index is invalid.
  */
-#define ELF_IDX_NULL ((Elf64_Xword)-1)
+#define ELF_IDX_NULL ((elf_idx_t)-1)
 
 #define pr_error(...) fprintf(stderr, __VA_ARGS__)
 

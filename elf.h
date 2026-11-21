@@ -989,11 +989,16 @@ typedef struct
  * eventually replaced by standard RELR* relocations
  * https://android.googlesource.com/platform/bionic/+/b7feec74547f84559a1467aca02708ff61346d2a/libc/include/elf.h#253
  */
-#define DT_ANDROID_RELR     0x6fffe000  /* Address of RELR relocation table. */
-#define DT_ANDROID_RELRSZ   0x6fffe001  /* Size of RELR relocation table. */
-#define DT_ANDROID_RELRENT  0x6fffe003  /* Size of a RELR relocation entry. */
-#define DT_ANDROID_RELRCOUNT    0x6fffe005  /* Number of RELR relocation
-                                               entries. */
+#define DT_ANDROID_RELR     0x6fffe000  /* Address of RELR relocation table.
+                                           Has the same role as `DT_REL`. */
+#define DT_ANDROID_RELRSZ   0x6fffe001  /* Size of RELR relocation table.
+                                           Has the same role as `DT_RELSZ`. */
+#define DT_ANDROID_RELRENT  0x6fffe003  /* Size of a RELR relocation entry.
+                                           Has the same role as `DT_RELRENT`. */
+#define DT_ANDROID_RELRCOUNT    0x6fffe005  /* If it made sense, would've been
+    specifying the number of relative relocation entries at the start of the
+    table of relative relocations. This doesn't make sense, therefore this entry
+    is ignored and unused. */
 
 /* Sony Orbis-specific DT_* tags */
 #define DT_SCE_FINGERPRINT 	0x61000007

@@ -454,35 +454,53 @@ struct elf_reloc {
         size_t num_decoded;
 
         /**
-         * Index into the dynamic entries array of the `DT_RELRSZ` entry,
+         * Indicates whether the DT_ANDROID_RELR* equivalents of the standard
+         * DT_RELR* entries are used.
+         *
+         * Before the `DT_RELR*` tags were accepted into the ELF standard,
+         * Android was already using RELR tables to speed up dynamic linking.
+         * To be able to do this, they introduced the DT_ANDROID_RELR* tags
+         * in the OS-specific range, which serve the exact same purposes
+         * as the later (DT_REL*) standard equivalents.
+         *
+         * If this fiels is `true`,
+         *  `dt_relrsz_idx` references the `DT_ANDROID_RELRSZ` entry,
+         *  `dt_relr_idx` references the `DT_ANDROID_RELR` entry and
+         *  `dt_relrent_idx` references the `DT_ANDROID_RELRENT` entry.
+         */
+        bool uses_android_tags;
+
+        /**
+         * Index into the dynamic entries array of the
+         * `DT_(ANDROID_)RELRSZ` entry,
          * whose value is equal to that of `size`.
          * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relrsz_idx;
 
         /**
-         * Index into the dynamic entries array of the `DT_RELR` entry,
-         * whose value is equal to that of `vaddr`.
+         * Index into the dynamic entries array of the
+         * `DT_(ANDROID_)RELR` entry, whose value is equal to that of `vaddr`.
          * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relr_idx;
 
         /**
-         * Index into the dynamic entries array of the `DT_RELRENT` entry,
-         * whose value is equal to that of `entsize`.
+         * Index into the dynamic entries array of the `DT_(ANDROID_)RELRENT`
+         * entry, whose value is equal to that of `entsize`.
          * Always a valid index if `present == true`.
          */
         elf_idx_t dt_relrent_idx;
 
 
         /**
-         * Number of `SHT_RELR` section headers that overlap the RELR table;
-         * the size of `shdrs`.
+         * Number of `SHT_(ANDROID_)RELR` section headers that
+         * overlap the RELR table; the size of `shdrs`.
          */
         size_t n_shdrs;
 
         /**
-         * Array of `n_shdrs` indices of the `SHT_RELR` sections
+         * Array of `n_shdrs` indices of the `SHT_(ANDROID_)RELR` sections
          * that overlap the packed relative relocations table.
          * If `n_shdrs == 0`, this member holds `NULL`.
          */
@@ -580,6 +598,7 @@ static const struct elf_reloc_relr empty_reloc_relr_st = {
     .vaddr = 0, .off = 0, .size = 0, .entsize = 0,
     .arr = NULL, .num = 0,
     .decoded_arr = NULL, .num_decoded = 0,
+    .uses_android_tags = false,
     .dt_relrsz_idx = ELF_IDX_NULL,
     .dt_relr_idx = ELF_IDX_NULL,
     .dt_relrent_idx = ELF_IDX_NULL,

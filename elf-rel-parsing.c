@@ -464,13 +464,14 @@ static int parse_relr(
 );
 
 /**
- * Locates and parses the DT_RELR table metadata,
+ * Locates and parses the DT_(ANDROID_)RELR table metadata,
  * initializing the relevant fields in the `elf_reloc_relr` struct.
  * Part of `parse_relr`.
  *
  * The following fields are populated with the parsed values:
  *      vaddr, off, size, entsize;
  *      num,
+ *      uses_android_tags,
  *      dt_relrsz_idx, dt_relr_idx, dt_relrent_idx;
  * The following fields are initialized to NULL/empty values:
  *      arr;
@@ -484,6 +485,10 @@ static int parse_relr(
  *
  * In case of failure or if no DT_RELR metadata is found,
  * `out` is initialized to `empty_reloc_relr_st`.
+ *
+ * Either one of the DT_RELR* and DT_ANDROID_RELR* tag sets describe
+ * the dynamic RELR table. The function uses whichever one is found,
+ * although both sets being present is rejected.
  *
  * @param[in] entries The parsed dynamic entries array. Must not be NULL.
  *
@@ -736,7 +741,7 @@ static int find_validate_sht_relX_shdrs(
 {
     size_t num = 0;
     elf_idx_t *arr = NULL;
-    const bool relr = sh_type == SHT_RELR;
+    const bool relr = (sh_type == SHT_RELR || sh_type == SHT_ANDROID_RELR);
 
     *out_arr = NULL;
     *out_num = 0;
@@ -958,7 +963,7 @@ static int find_rel(const struct elf_dyn_entries *entries, int clazz,
         pr_error("Invalid combination of the DT_REL* entries\n");
         return -1;
     } else if (r > 0) {
-        pr_debug("No dynsym REL table\n");
+        pr_debug("No dynamic REL table\n");
         return 1;
     }
 
@@ -1102,7 +1107,7 @@ static int find_rela(const struct elf_dyn_entries *entries, int clazz,
         pr_error("Invalid combination of the DT_RELA* entries\n");
         return -1;
     } else if (r > 0) {
-        pr_debug("No dynsym RELA table\n");
+        pr_debug("No dynamic RELA table\n");
         return 1;
     }
 
@@ -1418,6 +1423,7 @@ static int parse_relr(
     *out = empty_reloc_relr_st;
 
     int ret = 0;
+    Elf64_Word sh_type = SHT_NULL;
 
     const int r = find_relr(entries, data->clazz, phdrs, &relr);
     if (r < 0) {
@@ -1438,16 +1444,18 @@ static int parse_relr(
         goto err;
     }
 
+    sh_type = relr.uses_android_tags ? SHT_ANDROID_RELR : SHT_RELR;
     if (find_validate_sht_relX_shdrs(shdrs, relr.vaddr, relr.off, relr.size,
                                      ELF_IDX_NULL, relr.entsize,
-                                     &relr.shdrs, &relr.n_shdrs, SHT_RELR) < 0)
+                                     &relr.shdrs, &relr.n_shdrs, sh_type) < 0)
     {
         pr_error("Invalid SHT_RELR section header(s)\n");
         ret = -1;
         goto err;
     }
 
-    pr_debug("DT_RELR: %zu entries; with %zu decoded target addresses\n",
+    pr_debug("DT_%sRELR: %zu entries; with %zu decoded target addresses\n",
+             (relr.uses_android_tags ? "ANDROID_" : ""),
              relr.num, relr.num_decoded);
     relr.present = true;
 
@@ -1471,22 +1479,63 @@ static int find_relr(const struct elf_dyn_entries *entries, int clazz,
 {
     *out = empty_reloc_relr_st;
 
-    enum { DT_RELRSZ_IDX = 0, DT_RELR_IDX = 1, DT_RELRENT_IDX = 2 };
-    elf_idx_t idxs[3] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL };
+    elf_idx_t dt_relrsz_idx = ELF_IDX_NULL,
+              dt_relr_idx = ELF_IDX_NULL,
+              dt_relrent_idx = ELF_IDX_NULL;
+    bool uses_android_tags = false;
+    {
+        enum { STANDARD = 0, ANDROID = 1 };
+        enum { DT_RELRSZ_IDX = 0, DT_RELR_IDX = 1, DT_RELRENT_IDX = 2 };
+        elf_idx_t idxs[2][3] = {
+            [STANDARD] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL },
+            [ANDROID] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL }
+        };
 
-    const int r = find_unique_dyn_entries(entries, 3,
-            (Elf64_Sxword[]) { DT_RELRSZ, DT_RELR, DT_RELRENT }, idxs);
-    if (r < 0) {
-        pr_error("Invalid combination of the DT_RELR* tags\n");
-        return -1;
-    } else if (r > 0) {
-        pr_debug("No dynsym RELR table\n");
-        return 1;
+        int r = find_unique_dyn_entries(
+                entries, 3, (Elf64_Sxword[])
+                { DT_RELRSZ, DT_RELR, DT_RELRENT },
+                idxs[STANDARD]
+        );
+        if (r < 0) {
+            pr_error("Invalid combination of the DT_RELR* tags\n");
+            return -1;
+        }
+        const bool standard_tags_present = r == 0;
+
+        r = find_unique_dyn_entries(
+                entries, 3, (Elf64_Sxword[])
+                { DT_ANDROID_RELRSZ, DT_ANDROID_RELR, DT_ANDROID_RELRENT },
+                idxs[ANDROID]
+        );
+        if (r < 0) {
+            pr_error("Invalid combination of the DT_ANDROID_RELR* tags\n");
+            return -1;
+        }
+        const bool android_tags_present = r == 0;
+
+        if (standard_tags_present && android_tags_present) {
+            pr_error("Both standard (DT_RELR*) and android (DT_ANDROID_RELR*) "
+                     "tags are present\n");
+            return -1;
+        } else if (standard_tags_present) {
+            dt_relrsz_idx   = idxs[STANDARD][DT_RELRSZ_IDX];
+            dt_relr_idx     = idxs[STANDARD][DT_RELR_IDX];
+            dt_relrent_idx  = idxs[STANDARD][DT_RELRENT_IDX];
+            uses_android_tags = false;
+        } else if (android_tags_present) {
+            dt_relrsz_idx   = idxs[ANDROID][DT_RELRSZ_IDX];
+            dt_relr_idx     = idxs[ANDROID][DT_RELR_IDX];
+            dt_relrent_idx  = idxs[ANDROID][DT_RELRENT_IDX];
+            uses_android_tags = true;
+        } else /* if (!android_tags_present && !standard_tags_present) */ {
+            pr_debug("No dynamic RELR table\n");
+            return 1;
+        }
     }
 
-    const Elf64_Xword size = entries->arr[idxs[DT_RELRSZ_IDX]].d_un.d_val;
-    const Elf64_Addr vaddr = entries->arr[idxs[DT_RELR_IDX]].d_un.d_ptr;
-    const Elf64_Xword entsize = entries->arr[idxs[DT_RELRENT_IDX]].d_un.d_val;
+    const Elf64_Xword size = entries->arr[dt_relrsz_idx].d_un.d_val;
+    const Elf64_Addr vaddr = entries->arr[dt_relr_idx].d_un.d_ptr;
+    const Elf64_Xword entsize = entries->arr[dt_relrent_idx].d_un.d_val;
 
     if (!(clazz == ELFCLASS32 && entsize == sizeof(Elf32_Relr)) &&
         !(clazz == ELFCLASS64 && entsize == sizeof(Elf64_Relr)))
@@ -1524,9 +1573,10 @@ static int find_relr(const struct elf_dyn_entries *entries, int clazz,
     out->decoded_arr = NULL;
     out->num_decoded = 0;
 
-    out->dt_relrsz_idx = idxs[DT_RELRSZ_IDX];
-    out->dt_relr_idx = idxs[DT_RELR_IDX];
-    out->dt_relrent_idx = idxs[DT_RELRENT_IDX];
+    out->uses_android_tags = uses_android_tags;
+    out->dt_relrsz_idx = dt_relrsz_idx;
+    out->dt_relr_idx = dt_relr_idx;
+    out->dt_relrent_idx = dt_relrent_idx;
 
     out->n_shdrs = 0;
     out->shdrs = NULL;

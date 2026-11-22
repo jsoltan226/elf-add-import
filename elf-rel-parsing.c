@@ -10,6 +10,55 @@
 #include <string.h>
 
 /**
+ * @enum Helper for generalizing the similar REL, RELA and RELR tags
+ */
+enum reloc_type {
+    /** DT_(ANDROID_)REL, DT_(ANDROID_)RELSZ, DT_(ANDROID_)RELENT */
+    RELx_TYPE_REL =  0,
+
+    /** DT_(ANDROID_)RELA, DT_(ANDROID_)RELASZ, DT_(ANDROID_)RELAENT */
+    RELx_TYPE_RELA = 1,
+
+    /** DT_(ANDROID_)RELR, DT_(ANDROID_)RELRSZ, DT_(ANDROID_)RELRENT */
+    RELx_TYPE_RELR = 2,
+
+    RELx_TYPE_num
+};
+
+/** Strings corresponding to the above `enum reloc_type`'s members */
+static const char * const reloc_type_names[RELx_TYPE_num] = {
+    [RELx_TYPE_REL] = "REL",
+    [RELx_TYPE_RELA] = "RELA",
+    [RELx_TYPE_RELR] = "RELR"
+};
+
+/**
+ * @enum Helper for distinguishing between standard and android DT_* tag sets.
+ */
+enum reloc_variant {
+    /** Semantically invalid value. */
+    RELx_VARIANT_NONE = -1,
+
+    /**
+     * Standard REL* tags;
+     *  For `RELx_TYPE_REL`:    DT_REL, DT_RELSZ, DT_RELENT;
+     *  For `RELx_TYPE_RELA`:   DT_RELA, DT_RELASZ, DT_RELAENT;
+     *  For `RELx_TYPE_RELR`:   DT_RELRSZ, DT_RELR, DT_RELRENT;
+     */
+    RELx_VARIANT_STANDARD = 1,
+
+    /**
+     * Android REL* tags tags;
+     *  For `RELx_TYPE_REL`:    DT_REL, DT_RELSZ, DT_RELENT;
+     *  For `RELx_TYPE_RELA`:   DT_RELA, DT_RELASZ, DT_RELAENT;
+     *  For `RELx_TYPE_RELR`:   DT_RELRSZ, DT_RELR, DT_RELRENT;
+     */
+    RELx_VARIANT_ANDROID = 2,
+
+    RELx_VARIANT_num
+};
+
+/**
  * Reads a table of ElfXX_Rel or ElfXX_Rela entries.
  *
  * @param[in] data The ELF file data. Must not be NULL.
@@ -136,6 +185,70 @@ static int validate_sht_relX_shdr(
         const elf_idx_t *found_shdrs, size_t curr_num_found_shdrs,
         Elf64_Half entsize, elf_idx_t sht_dynsym_idx, bool is_relr
 );
+
+/**
+ * For each of the `RELx_TYPE`s, finds which of the two (STANDARD or ANDROID)
+ * tag set variants are present. Does _not_ handle the JMPREL/PLTREL tags.
+ * Part of `parse_reloc`.
+ *
+ * For REL entries, the following tags:
+ *  `DT_REL`, `DT_RELSZ`, `DT_RELENT`,
+ *  `DT_ANDROID_REL`, `DT_ANDROID_RELSZ`,
+ * are only permitted in these combinations:
+ *  (`DT_REL`, `DT_RELSZ`, `DT_RELENT`),
+ *  (`DT_ANDROID_REL`, `DT_ANDROID_RELSZ`, `DT_RELENT`),
+ *  (`DT_REL`, `DT_RELSZ`, `DT_ANDROID_REL`, `DT_ANDROID_RELSZ`, `DT_RELENT`),
+ *  (none at all).
+ * Any occurrence of the above tags that does not exactly match
+ * one of these sets is rejected.
+ *
+ * Notice that `DT_RELENT` is "shared" between the rest
+ * of the standard and android tags.
+ *
+ * Similarly, for RELA:
+ *  `DT_RELA`, `DT_RELASZ`, `DT_RELAENT`,
+ *  `DT_ANDROID_RELA`, `DT_ANDROID_RELASZ`,
+ * are only permitted in exactly one of these combinations:
+ *  (`DT_RELA`, `DT_RELASZ`, `DT_RELAENT`),
+ *  (`DT_ANDROID_RELA`, `DT_ANDROID_RELASZ`, `DT_RELAENT`)
+ *  (`DT_RELA`, `DT_RELASZ`, `DT_ANDROID_RELA`, `DT_ANDROID_RELASZ`,
+ *   `DT_RELAENT`),
+ *  (none at all).
+ *
+ * Now for RELR, the DT_ANDROID_RELR* set describes literally the exact same
+ * table/concept as the standard DT_RELR*, and so they are considered
+ * mutually exclusive. Therefore:
+ *  `DT_RELR`, `DT_RELRSZ`, `DT_RELRENT`,
+ *  `DT_ANDROID_RELR`, `DT_ANDROID_RELRSZ`, `DT_ANDROID_RELRENT`
+ * are permitted to occur only in one of these combinations:
+ *  (`DT_RELR`, `DT_RELRSZ`, `DT_RELRENT`),
+ *  (`DT_ANDROID_RELR`, `DT_ANDROID_RELRSZ`, `DT_ANDROID_RELRENT`),
+ *  (none at all).
+ *
+ * The unused `DT_ANDROID_RELRCOUNT` tag is ignored
+ * and its presence or absence does not affect the result of this function.
+ * If it's found, a warning is printed to indicate that it's ignored.
+ *
+ * @param[in] entries The parsed dynamic entries array. Must not be NULL.
+ *
+ * @param[out] out_rel Output pointer for a mask of present REL tag sets:
+ *  If `DT_REL` is found: `*out_rela & (1u << RELx_VARIANT_STANDARD)`;
+ *  If `DT_ANDROID_REL` is found: `*out_rela & (1u << RELx_VARIANT_ANDROID)`;
+ *
+ * @param[out] out_rela Output pointer for a mask of present RELA tag sets:
+ *  If `DT_RELA` is found: `*out_rela & (1u << RELx_VARIANT_STANDARD)`;
+ *  If `DT_ANDROID_RELA` is found: `*out_rela & (1u << RELx_VARIANT_ANDROID)`;
+ *
+ * @param[out] out_relr Output pointer for the variant of RELR tags:
+ *  If `DT_RELR` is present: `*out_relr == RELx_VARIANT_STANDARD`,
+ *  If `DT_ANDROID_RELR` is present: `*out_relr == RELx_VARIANT_ANDROID`,
+ *  If no RELR tags are present: `*out_relr == RELx_VARIANT_NONE`.
+ *
+ * @return 0 on success, non-zero if an invalid combination of tags is found.
+ */
+static int get_relX_variants(const struct elf_dyn_entries *entries,
+                             unsigned int *out_rel, unsigned int *out_rela,
+                             enum reloc_variant *out_relr);
 
 /**
  * Finds and, if present, parses the table of relocations
@@ -442,6 +555,11 @@ static int find_jmprel(const struct elf_dyn_entries *entries, int clazz,
  * Also finds any sections that overlap the RELR table
  * and validates them against the data from the dynamic entries and phdrs.
  *
+ * Either one of the DT_RELR* and DT_ANDROID_RELR* tag sets describe
+ * the dynamic RELR table. This function assumes that both conflicting
+ * sets being present at the same time has already been validated
+ * to not be the case.
+ *
  * @param[in] data The ELF file data. Must not be NULL.
  *
  * @param[in] phdrs The parsed program headers array. Must not be NULL.
@@ -449,6 +567,10 @@ static int find_jmprel(const struct elf_dyn_entries *entries, int clazz,
  * @param[in] shdrs The parsed section headers array. Must not be NULL.
  *
  * @param[in] entries The parsed dynamic entries array. Must not be NULL.
+ *
+ * @param[in] variant Which of the DT_RELR* or DT_ANDROID_RELR* tag sets
+ *  to look for. Must be either `RELx_VARIANT_STANDARD` or
+ *  `RELx_VARIANT_ANDROID` for the respective sets.
  *
  * @param[out] out Output pointer, populated with actual values on success
  *  and initialized to `empty_reloc_relr_st` otherwise. Must not be NULL.
@@ -460,7 +582,7 @@ static int find_jmprel(const struct elf_dyn_entries *entries, int clazz,
 static int parse_relr(
         const ElfFileData *data, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, const struct elf_dyn_entries *entries,
-        struct elf_reloc_relr *out
+        enum reloc_variant variant, struct elf_reloc_relr *out
 );
 
 /**
@@ -487,14 +609,19 @@ static int parse_relr(
  * `out` is initialized to `empty_reloc_relr_st`.
  *
  * Either one of the DT_RELR* and DT_ANDROID_RELR* tag sets describe
- * the dynamic RELR table. The function uses whichever one is found,
- * although both sets being present is rejected.
+ * the dynamic RELR table. This function assumes that both conflicting
+ * sets being present at the same time has already been validated
+ * to not be the case.
  *
  * @param[in] entries The parsed dynamic entries array. Must not be NULL.
  *
  * @param[in] clazz Class of the ELF file (`ELFCLASS32` or `ELFCLASS64`).
  *
  * @param[in] phdrs The parsed program headers array. Must not be NULL.
+ *
+ * @param[in] variant Which of the DT_RELR* or DT_ANDROID_RELR* tag sets
+ *  to look for. Must be either `RELx_VARIANT_STANDARD` or
+ *  `RELx_VARIANT_ANDROID` for the respective sets.
  *
  * @param[out] out Output pointer. Must not be NULL.
  *
@@ -503,7 +630,8 @@ static int parse_relr(
  *         negative (<0) value if the found DT_RELR metadata is invalid.
  */
 static int find_relr(const struct elf_dyn_entries *entries, int clazz,
-                     const struct elf_phdrs *phdrs, struct elf_reloc_relr *out);
+                     const struct elf_phdrs *phdrs, enum reloc_variant variant,
+                     struct elf_reloc_relr *out);
 
 /**
  * Reads and decodes the packed relative relocation (RELR) table entries.
@@ -599,16 +727,31 @@ int parse_reloc(const ElfFileData *data,
     *out = empty_reloc_st;
     *out_max_symidx = 0;
 
-    if (parse_rel(data, phdrs, shdrs, entries, &max_symidx, &rel.rel) < 0) {
-        pr_error("Invalid table of "
-                 "dynsym relocations (without explicit addends)\n");
+    enum reloc_variant relr_variant = RELx_VARIANT_NONE;
+    unsigned int rel_variants = 0, rela_variants = 0;
+    if (get_relX_variants(entries,
+                      &rel_variants, &rela_variants, &relr_variant))
+    {
+        pr_error("Invalid standard/android REL* tag combinations\n");
         goto err;
     }
 
-    if (parse_rela(data, phdrs, shdrs, entries, &max_symidx, &rel.rela) < 0) {
-        pr_error("Invalid table of "
-                 "dynsym relocations (with explicit addends)\n");
-        goto err;
+    if (rel_variants & (1u << RELx_VARIANT_STANDARD)) {
+        if (parse_rel(data, phdrs, shdrs, entries, &max_symidx, &rel.rel) < 0) {
+            pr_error("Invalid table of "
+                     "dynsym relocations (without explicit addends)\n");
+            goto err;
+        }
+    }
+
+    if (rela_variants & (1u << RELx_VARIANT_STANDARD)) {
+        if (parse_rela(data, phdrs, shdrs, entries, &max_symidx, &rel.rela)
+                < 0)
+        {
+            pr_error("Invalid table of "
+                     "dynsym relocations (with explicit addends)\n");
+            goto err;
+        }
     }
 
     if (parse_jmprel(data, phdrs, shdrs, entries, &rel.rel, &rel.rela,
@@ -618,10 +761,14 @@ int parse_reloc(const ElfFileData *data,
         goto err;
     }
 
-    if (parse_relr(data, phdrs, shdrs, entries, &rel.relr) < 0) {
-        pr_error("Invalid table of "
-                 "dynsym packed relative relocations\n");
-        goto err;
+    if (relr_variant != RELx_VARIANT_NONE) {
+        if (parse_relr(data, phdrs, shdrs, entries, relr_variant, &rel.relr)
+                < 0)
+        {
+            pr_error("Invalid table of "
+                     "dynsym packed relative relocations\n");
+            goto err;
+        }
     }
 
     *out = rel; rel = empty_reloc_st;
@@ -712,14 +859,15 @@ static int read_relX_table(
         Elf64_Xword r_info;
         memcpy(&r_info, (unsigned char *)ptr + r_info_offset,
                 sizeof(Elf64_Xword));
-        const Elf64_Word r_sym = (Elf64_Word)ELF64_R_SYM(r_info);
-                                /* ^ Always fits in 32 bits */
+        const Elf64_Word r_sym = (Elf64_Word)(ELF64_R_SYM(r_info));
+                                            /* ^ Always fits in 32 bits */
         if (r_sym > *max_symidx_p)
             *max_symidx_p = (Elf64_Word)r_sym;
 
         /* `R_TYPE` of `r_info` is machine-specific; don't check it */
 
-        /* (For ElfXX_Rela) `r_addend` can't really be validated here either */
+        /* (For ElfXX_Rela) `r_addend` can't really be validated here either
+         * as the way it's applied is different depending on the `R_TYPE` */
     }
 
     *out_arr = arr; arr = NULL;
@@ -892,6 +1040,244 @@ static int validate_sht_relX_shdr(
     }
 
     return ret;
+}
+
+static int get_relX_variants(const struct elf_dyn_entries *entries,
+                             unsigned int *out_rel, unsigned int *out_rela,
+                             enum reloc_variant *out_relr)
+{
+    enum { MAX_N_TAG_IDXS_IN_LIST = 5 };
+    struct tag_idx_list {
+        size_t num_idxs;
+        int tag_idxs[MAX_N_TAG_IDXS_IN_LIST];
+        unsigned int variants_mask;
+    };
+
+    enum { MAX_N_COMBINATIONS = 4 };
+    struct tag_combinations_list {
+        size_t num_lists;
+        const struct tag_idx_list tag_idx_lists[MAX_N_COMBINATIONS];
+    };
+
+    enum { MAX_N_TAGS_IN_SET = 6 };
+    struct tag_set {
+        size_t num_tags;
+        const Elf64_Sxword tags[MAX_N_TAGS_IN_SET];
+    };
+
+    enum rel_tag_idxs {
+        DT_REL_idx = 0,
+        DT_RELSZ_idx,
+        DT_ANDROID_REL_idx,
+        DT_ANDROID_RELSZ_idx,
+        DT_RELENT_idx,
+        NUM_REL_TAGS
+    };
+    enum rela_tag_idxs {
+        DT_RELA_idx = 0,
+        DT_RELASZ_idx,
+        DT_ANDROID_RELA_idx,
+        DT_ANDROID_RELASZ_idx,
+        DT_RELAENT_idx,
+        NUM_RELA_TAGS
+    };
+    enum relr_tag_idxs {
+        DT_RELRSZ_idx = 0,
+        DT_RELR_idx,
+        DT_RELRENT_idx,
+        DT_ANDROID_RELRSZ_idx,
+        DT_ANDROID_RELR_idx,
+        DT_ANDROID_RELRENT_idx,
+        NUM_RELR_TAGS
+    };
+
+    static const struct {
+        struct tag_set tags;
+        struct tag_combinations_list permitted_combinations;
+    } tags_and_their_permitted_combinations[RELx_TYPE_num] = {
+
+    [RELx_TYPE_REL] = {
+        .tags = {
+            .num_tags = NUM_REL_TAGS,
+            .tags = {
+                [DT_REL_idx]            = DT_REL,
+                [DT_RELSZ_idx]          = DT_RELSZ,
+                [DT_ANDROID_REL_idx]    = DT_ANDROID_REL,
+                [DT_ANDROID_RELSZ_idx]  = DT_ANDROID_RELSZ,
+                [DT_RELENT_idx]         = DT_RELENT
+            }
+        },
+        .permitted_combinations = {
+            .num_lists = 4,
+            .tag_idx_lists = {
+                {
+                    .num_idxs = 3,
+                    .tag_idxs =  { DT_REL_idx, DT_RELSZ_idx, DT_RELENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_STANDARD)
+                },
+                {
+                    .num_idxs = 3,
+                    .tag_idxs =  { DT_ANDROID_REL_idx, DT_ANDROID_RELSZ_idx,
+                                   DT_RELENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_ANDROID)
+                },
+                {
+                    .num_idxs = 5,
+                    .tag_idxs = { DT_REL_idx, DT_RELSZ_idx,
+                                  DT_ANDROID_REL_idx, DT_ANDROID_RELSZ_idx,
+                                  DT_RELENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_STANDARD) |
+                                     (1u << RELx_VARIANT_ANDROID)
+                },
+                { 0 }
+            }
+        }
+    },
+    [RELx_TYPE_RELA] = {
+        .tags = {
+            .num_tags = 5,
+            .tags = {
+                [DT_RELA_idx]           = DT_RELA,
+                [DT_RELASZ_idx]         = DT_RELASZ,
+                [DT_ANDROID_RELA_idx]   = DT_ANDROID_RELA,
+                [DT_ANDROID_RELASZ_idx] = DT_ANDROID_RELASZ,
+                [DT_RELAENT_idx]        = DT_RELAENT
+            },
+        },
+        .permitted_combinations = {
+            .num_lists = 4,
+            .tag_idx_lists = {
+                {
+                    .num_idxs = 3,
+                    .tag_idxs = { DT_RELA_idx, DT_RELASZ_idx, DT_RELAENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_STANDARD)
+                },
+                {
+                    .num_idxs = 3,
+                    .tag_idxs = { DT_ANDROID_RELA_idx, DT_ANDROID_RELASZ_idx,
+                                  DT_RELAENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_ANDROID)
+                },
+                {
+                    .num_idxs = 5,
+                    .tag_idxs = { DT_RELA_idx, DT_RELASZ_idx,
+                                  DT_ANDROID_RELA_idx, DT_ANDROID_RELASZ_idx,
+                                  DT_RELAENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_STANDARD) |
+                                     (1u << RELx_VARIANT_ANDROID)
+                },
+                { 0 }
+            },
+        }
+    },
+    [RELx_TYPE_RELR] = {
+        .tags = {
+            .num_tags = 6,
+            .tags = {
+                [DT_RELRSZ_idx]             = DT_RELRSZ,
+                [DT_RELR_idx]               = DT_RELR,
+                [DT_RELRENT_idx]            = DT_RELRENT,
+                [DT_ANDROID_RELRSZ_idx]     = DT_ANDROID_RELRSZ,
+                [DT_ANDROID_RELR_idx]       = DT_ANDROID_RELR,
+                [DT_ANDROID_RELRENT_idx]    = DT_ANDROID_RELRENT
+            },
+        },
+        .permitted_combinations = {
+            .num_lists = 3,
+            .tag_idx_lists = {
+                {
+                    .num_idxs = 3,
+                    .tag_idxs = { DT_RELR_idx, DT_RELRSZ_idx, DT_RELRENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_STANDARD)
+                },
+                {
+                    .num_idxs = 3,
+                    .tag_idxs = { DT_ANDROID_RELR_idx, DT_ANDROID_RELRSZ_idx,
+                                  DT_ANDROID_RELRENT_idx },
+                    .variants_mask = (1u << RELx_VARIANT_ANDROID)
+                },
+                { 0 }
+            },
+        }
+    }
+
+    };
+
+    /* Warn about the unused DT_ANDROID_RELRCOUNT tag, if present */
+    {
+        elf_idx_t d;
+        const int r = find_unique_dyn_entry(entries, DT_ANDROID_RELRCOUNT, &d);
+        if (r < 0)
+            return -1;
+
+        else if (r == 0) {
+            pr_error("WARNING: Unused DT_ANDROID_RELRCOUNT tag found; "
+                     "its value is ignored and will not be validated "
+                     "or used anywhere.\n");
+        }
+    }
+
+    unsigned int out_masks[RELx_TYPE_num] = { 0 };
+
+    for (enum reloc_type type = 0; type < RELx_TYPE_num; type++) {
+        unsigned int entries_present_mask = 0u;
+        const struct tag_set *const tag_set =
+            &tags_and_their_permitted_combinations[type].tags;
+
+        for (size_t i = 0; i < tag_set->num_tags; i++) {
+            elf_idx_t dummy;
+            const int r = find_unique_dyn_entry(entries, tag_set->tags[i],
+                                                &dummy);
+            if (r < 0)
+                return -1;
+
+            if (r == 0)
+                entries_present_mask |= (1u << i);
+        }
+
+        const struct tag_combinations_list *permitted_combs =
+            &tags_and_their_permitted_combinations[type].permitted_combinations;
+        bool match_found = false;
+        for (size_t i = 0; i < permitted_combs->num_lists; i++) {
+            const struct tag_idx_list *const idx_list =
+                &permitted_combs->tag_idx_lists[i];
+
+            unsigned int tmp_mask = entries_present_mask;
+            for (size_t j = 0; j < idx_list->num_idxs; j++) {
+                const int idx = idx_list->tag_idxs[j];
+
+                tmp_mask ^= (1u << idx);
+            }
+
+            /* We've flipped all the bits that correspond
+             * to this permitted combination's tags' idxs */
+            if (tmp_mask == 0) {
+                match_found = true;
+                out_masks[type] = idx_list->variants_mask;
+            }
+        }
+
+        if (!match_found) {
+            pr_error("Invalid combination of DT_(ANDROID_)%s tags\n",
+                     reloc_type_names[type]);
+            return -1;
+        }
+    }
+
+    *out_rel = out_masks[RELx_TYPE_REL];
+    *out_rela = out_masks[RELx_TYPE_RELA];
+
+    const unsigned int relr_mask_val = out_masks[RELx_TYPE_RELR];
+    if (relr_mask_val == 1u << RELx_VARIANT_STANDARD)
+        *out_relr = RELx_VARIANT_STANDARD;
+    else if (relr_mask_val == 1u << RELx_VARIANT_ANDROID)
+        *out_relr = RELx_VARIANT_ANDROID;
+    else if (relr_mask_val == 0)
+        *out_relr = RELx_VARIANT_NONE;
+    else
+        assert(0); /* impossible outcome */
+
+    return 0;
 }
 
 static int parse_rel(
@@ -1416,7 +1802,7 @@ static int find_jmprel(const struct elf_dyn_entries *entries, int clazz,
 static int parse_relr(
         const ElfFileData *data, const struct elf_phdrs *phdrs,
         const struct elf_shdrs *shdrs, const struct elf_dyn_entries *entries,
-        struct elf_reloc_relr *out
+        enum reloc_variant variant, struct elf_reloc_relr *out
 )
 {
     struct elf_reloc_relr relr = empty_reloc_relr_st;
@@ -1425,7 +1811,7 @@ static int parse_relr(
     int ret = 0;
     Elf64_Word sh_type = SHT_NULL;
 
-    const int r = find_relr(entries, data->clazz, phdrs, &relr);
+    const int r = find_relr(entries, data->clazz, phdrs, variant, &relr);
     if (r < 0) {
         pr_error("Invalid RELR table metadata\n");
         ret = -1;
@@ -1475,67 +1861,43 @@ err:
 }
 
 static int find_relr(const struct elf_dyn_entries *entries, int clazz,
-                     const struct elf_phdrs *phdrs, struct elf_reloc_relr *out)
+                     const struct elf_phdrs *phdrs, enum reloc_variant variant,
+                     struct elf_reloc_relr *out)
 {
+    assert(variant == RELx_VARIANT_STANDARD || variant == RELx_VARIANT_ANDROID);
+
     *out = empty_reloc_relr_st;
 
-    elf_idx_t dt_relrsz_idx = ELF_IDX_NULL,
-              dt_relr_idx = ELF_IDX_NULL,
-              dt_relrent_idx = ELF_IDX_NULL;
-    bool uses_android_tags = false;
+    enum { DT_RELRSZ_idx = 0, DT_RELR_idx = 1, DT_RELRENT_idx = 2 };
+    elf_idx_t idxs[3] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL };
     {
-        enum { STANDARD = 0, ANDROID = 1 };
-        enum { DT_RELRSZ_IDX = 0, DT_RELR_IDX = 1, DT_RELRENT_IDX = 2 };
-        elf_idx_t idxs[2][3] = {
-            [STANDARD] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL },
-            [ANDROID] = { ELF_IDX_NULL, ELF_IDX_NULL, ELF_IDX_NULL }
-        };
+        const Elf64_Sxword standard[3] =
+                { DT_RELRSZ, DT_RELR, DT_RELRENT };
+
+        const Elf64_Sxword android[3] =
+                { DT_ANDROID_RELRSZ, DT_ANDROID_RELR, DT_ANDROID_RELRENT };
+
+        /* Normally we would have to check that the standard and android
+         * tags aren't both present at the same time,
+         * but `get_relX_variants` already does that */
 
         int r = find_unique_dyn_entries(
-                entries, 3, (Elf64_Sxword[])
-                { DT_RELRSZ, DT_RELR, DT_RELRENT },
-                idxs[STANDARD]
+                entries, 3,
+                (variant == RELx_VARIANT_ANDROID) ? android : standard,
+                idxs
         );
         if (r < 0) {
-            pr_error("Invalid combination of the DT_RELR* tags\n");
+            pr_error("Invalid combination of the DT_(ANDROID_)RELR* tags\n");
             return -1;
-        }
-        const bool standard_tags_present = r == 0;
-
-        r = find_unique_dyn_entries(
-                entries, 3, (Elf64_Sxword[])
-                { DT_ANDROID_RELRSZ, DT_ANDROID_RELR, DT_ANDROID_RELRENT },
-                idxs[ANDROID]
-        );
-        if (r < 0) {
-            pr_error("Invalid combination of the DT_ANDROID_RELR* tags\n");
-            return -1;
-        }
-        const bool android_tags_present = r == 0;
-
-        if (standard_tags_present && android_tags_present) {
-            pr_error("Both standard (DT_RELR*) and android (DT_ANDROID_RELR*) "
-                     "tags are present\n");
-            return -1;
-        } else if (standard_tags_present) {
-            dt_relrsz_idx   = idxs[STANDARD][DT_RELRSZ_IDX];
-            dt_relr_idx     = idxs[STANDARD][DT_RELR_IDX];
-            dt_relrent_idx  = idxs[STANDARD][DT_RELRENT_IDX];
-            uses_android_tags = false;
-        } else if (android_tags_present) {
-            dt_relrsz_idx   = idxs[ANDROID][DT_RELRSZ_IDX];
-            dt_relr_idx     = idxs[ANDROID][DT_RELR_IDX];
-            dt_relrent_idx  = idxs[ANDROID][DT_RELRENT_IDX];
-            uses_android_tags = true;
-        } else /* if (!android_tags_present && !standard_tags_present) */ {
+        } else if (r > 0) {
             pr_debug("No dynamic RELR table\n");
             return 1;
         }
     }
 
-    const Elf64_Xword size = entries->arr[dt_relrsz_idx].d_un.d_val;
-    const Elf64_Addr vaddr = entries->arr[dt_relr_idx].d_un.d_ptr;
-    const Elf64_Xword entsize = entries->arr[dt_relrent_idx].d_un.d_val;
+    const Elf64_Xword size = entries->arr[idxs[DT_RELRSZ_idx]].d_un.d_val;
+    const Elf64_Addr vaddr = entries->arr[idxs[DT_RELR_idx]].d_un.d_ptr;
+    const Elf64_Xword entsize = entries->arr[idxs[DT_RELRENT_idx]].d_un.d_val;
 
     if (!(clazz == ELFCLASS32 && entsize == sizeof(Elf32_Relr)) &&
         !(clazz == ELFCLASS64 && entsize == sizeof(Elf64_Relr)))
@@ -1573,10 +1935,10 @@ static int find_relr(const struct elf_dyn_entries *entries, int clazz,
     out->decoded_arr = NULL;
     out->num_decoded = 0;
 
-    out->uses_android_tags = uses_android_tags;
-    out->dt_relrsz_idx = dt_relrsz_idx;
-    out->dt_relr_idx = dt_relr_idx;
-    out->dt_relrent_idx = dt_relrent_idx;
+    out->uses_android_tags = (variant == RELx_VARIANT_ANDROID);
+    out->dt_relrsz_idx = idxs[DT_RELRSZ_idx];
+    out->dt_relr_idx = idxs[DT_RELR_idx];
+    out->dt_relrent_idx = idxs[DT_RELRENT_idx];
 
     out->n_shdrs = 0;
     out->shdrs = NULL;

@@ -1816,8 +1816,7 @@ static int do_verdef_dfs_cycle_check(const struct ver_parsing_ctx *ctx,
             continue;
         }
 
-        /* We're in the process of visiting this node's subtrees;
-         * process the next one */
+        /* We're in the process of visiting this node's subtrees */
 
         const Elf64_Half curr_aux_idx = frame.next_aux_idx;
         frame.next_aux_idx++;
@@ -1847,7 +1846,7 @@ static int do_verdef_dfs_cycle_check(const struct ver_parsing_ctx *ctx,
 
 
         /* this child's subtree has already been cleared;
-         * skip visiting it */
+         * skip processing it */
         if (child_ref->dfs_state == VERDEF_DFS_DONE)
             continue;
 
@@ -1862,9 +1861,8 @@ static int do_verdef_dfs_cycle_check(const struct ver_parsing_ctx *ctx,
         }
 
         else if (child_ref->dfs_state == VERDEF_DFS_UNSEEN) {
-            /* We're seeing this node for the first time;
-             * mark it visited and add it to the stack,
-             * so that on the next iteration
+            /* We're seeing this node for the first time; visit it and
+             * add it to the stack, so that on the next iteration
              * we start descending its subtree */
             child_ref->dfs_state = VERDEF_DFS_VISITING;
 

@@ -506,6 +506,16 @@ struct elf_reloc {
          */
         elf_idx_t *shdrs;
     } relr;
+
+    struct elf_reloc_android_rela {
+        bool present;
+
+        Elf64_Addr vaddr;
+        Elf64_Xword size;
+
+        elf_idx_t dt_android_rela_idx;
+        elf_idx_t dt_android_relasz_idx;
+    } android_rela;
 };
 
 /**
